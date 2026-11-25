@@ -101,6 +101,8 @@ T7 -> T8
 **Tests**: none  
 **Gate**: quick
 
+**Status**: Complete - `python3 -m py_compile dataset/generate_pet_datasets.py` succeeded.
+
 ### T3: Add compact hierarchical CNN
 
 **What**: Implement one shared convolutional feature extractor with family and breed heads plus a feature-layer interface for pruning.  
