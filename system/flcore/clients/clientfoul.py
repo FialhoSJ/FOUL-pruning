@@ -26,6 +26,7 @@ from utils.hierarchical_data import read_hierarchical_client_data
 class clientFOUL(Client):
     def __init__(self, args, id, train_samples, test_samples, **kwargs):
         super().__init__(args, id, train_samples, test_samples, **kwargs)
+        self.args = args
         self.is_hierarchical = args.dataset in ("OxfordPet", "StanfordDogs")
 
     def _load_hierarchical_data(self, is_train=True):

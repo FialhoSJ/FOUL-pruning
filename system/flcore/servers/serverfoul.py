@@ -180,7 +180,10 @@ class FOUL(Server):
                     totals["samples"] += len(breed)
                     totals["breed_correct"] += int(breed_correct.sum().item())
                     totals["loss_sum"] += float(
-                        (self.loss(family_logits, family) + self.loss(breed_logits, breed)).item()
+                        (
+                            torch.nn.functional.cross_entropy(family_logits, family)
+                            + torch.nn.functional.cross_entropy(breed_logits, breed)
+                        ).item()
                         * len(breed)
                     )
                     if num_families > 1:
