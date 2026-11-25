@@ -12,7 +12,15 @@ from PIL import Image
 
 def _resize_rgb(image, image_size):
     resampling = getattr(Image, "Resampling", Image).BILINEAR
-    image = image.convert("RGB").resize((image_size, image_size), resampling)
+    image = image.convert("RGB")
+    width, height = image.size
+    short_side = max(image_size, int(round(image_size * 256 / 224)))
+    scale = short_side / min(width, height)
+    resized_width, resized_height = round(width * scale), round(height * scale)
+    image = image.resize((resized_width, resized_height), resampling)
+    left = (resized_width - image_size) // 2
+    top = (resized_height - image_size) // 2
+    image = image.crop((left, top, left + image_size, top + image_size))
     return np.asarray(image, dtype=np.uint8)
 
 
@@ -300,7 +308,7 @@ def make_parser():
     parser.add_argument("--partition", choices=("iid", "dirichlet"), default="iid")
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--image-size", type=int, default=128)
+    parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--download", action="store_true", help="Download Oxford-IIIT Pet if missing")
     return parser
 

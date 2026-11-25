@@ -15,6 +15,7 @@ class HierarchicalCNN(nn.Module):
         image_size=128,
         channels=(32, 64, 128),
         hidden_dim=256,
+        pool_grid=4,
     ):
         super().__init__()
         if num_families < 1 or num_breeds < 1:
@@ -25,19 +26,22 @@ class HierarchicalCNN(nn.Module):
             raise ValueError("channels must contain three positive widths")
         if hidden_dim < 1:
             raise ValueError("hidden_dim must be positive")
+        if pool_grid < 1:
+            raise ValueError("pool_grid must be positive")
 
         self.num_families = int(num_families)
         self.num_breeds = int(num_breeds)
         self.image_size = int(image_size)
         self.channels = tuple(int(width) for width in channels)
         self.hidden_dim = int(hidden_dim)
+        self.pool_grid = int(pool_grid)
 
         self.conv1 = nn.Conv2d(3, self.channels[0], kernel_size=5, padding=2)
         self.conv2 = nn.Conv2d(self.channels[0], self.channels[1], kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(self.channels[1], self.channels[2], kernel_size=3, padding=1)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc1 = nn.Linear(self.channels[2], self.hidden_dim)
+        self.global_pool = nn.AdaptiveAvgPool2d((self.pool_grid, self.pool_grid))
+        self.fc1 = nn.Linear(self.channels[2] * self.pool_grid ** 2, self.hidden_dim)
         self.family_head = nn.Linear(self.hidden_dim, self.num_families)
         self.breed_head = nn.Linear(self.hidden_dim, self.num_breeds)
 
@@ -69,4 +73,5 @@ class HierarchicalCNN(nn.Module):
             "image_size": self.image_size,
             "channels": self.channels,
             "hidden_dim": self.hidden_dim,
+            "pool_grid": getattr(self, "pool_grid", self.global_pool.output_size[0]),
         }

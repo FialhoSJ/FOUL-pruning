@@ -161,14 +161,23 @@ class FOUL(Server):
             "other_correct": 0,
             "other_samples": 0,
             "loss_sum": 0.0,
+            "family_loss_sum": 0.0,
+            "breed_loss_sum": 0.0,
+            "family_predictions": [0] * num_families,
+            "family_labels": [0] * num_families,
         }
         self.global_model.eval()
         with torch.no_grad():
             for client in self.clients:
-                data = read_hierarchical_client_data(
-                    self.dataset, client.id, is_train=False, dataset_root=dataset_root
-                )
-                images, families, breeds = data["x"], data["y"], data["y_subclass"]
+                if hasattr(self.global_model, "encode") and self.global_model.encoder_frozen:
+                    images, families, breeds = client._load_hierarchical_data(
+                        is_train=False
+                    ).tensors
+                else:
+                    data = read_hierarchical_client_data(
+                        self.dataset, client.id, is_train=False, dataset_root=dataset_root
+                    )
+                    images, families, breeds = data["x"], data["y"], data["y_subclass"]
                 for start in range(0, len(images), self.batch_size):
                     end = start + self.batch_size
                     x = images[start:end].to(self.device)
@@ -179,16 +188,24 @@ class FOUL(Server):
                     breed_correct = breed_prediction == breed
                     totals["samples"] += len(breed)
                     totals["breed_correct"] += int(breed_correct.sum().item())
-                    totals["loss_sum"] += float(
-                        (
-                            torch.nn.functional.cross_entropy(family_logits, family)
-                            + torch.nn.functional.cross_entropy(breed_logits, breed)
-                        ).item()
-                        * len(breed)
-                    )
+                    family_loss = float(torch.nn.functional.cross_entropy(family_logits, family).item())
+                    breed_loss = float(torch.nn.functional.cross_entropy(breed_logits, breed).item())
+                    totals["family_loss_sum"] += family_loss * len(breed)
+                    totals["breed_loss_sum"] += breed_loss * len(breed)
+                    totals["loss_sum"] += (
+                        family_loss + float(getattr(self.args, "breed_loss_weight", 2.0)) * breed_loss
+                    ) * len(breed)
                     if num_families > 1:
                         totals["family_samples"] += len(family)
-                        totals["family_correct"] += int((family_logits.argmax(dim=1) == family).sum().item())
+                        family_prediction = family_logits.argmax(dim=1)
+                        totals["family_correct"] += int((family_prediction == family).sum().item())
+                        for family_id in range(num_families):
+                            totals["family_predictions"][family_id] += int(
+                                (family_prediction == family_id).sum().item()
+                            )
+                            totals["family_labels"][family_id] += int(
+                                (family == family_id).sum().item()
+                            )
                     target_mask = breed == target_id
                     other_mask = ~target_mask
                     totals["target_samples"] += int(target_mask.sum().item())
@@ -215,15 +232,23 @@ class FOUL(Server):
             ),
             "overall_breed_accuracy": totals["breed_correct"] / totals["samples"],
             "test_loss": totals["loss_sum"] / totals["samples"],
+            "family_test_loss": totals["family_loss_sum"] / totals["samples"],
+            "breed_test_loss": totals["breed_loss_sum"] / totals["samples"],
+            "family_prediction_counts": totals["family_predictions"] if num_families > 1 else None,
+            "family_label_counts": totals["family_labels"] if num_families > 1 else None,
         }
         self.rs_test_acc.append(metrics["overall_breed_accuracy"])
         self.rs_train_loss.append(metrics["test_loss"])
         self.hierarchical_metrics.append(metrics)
 
         print(f"Family accuracy: {metrics['family_accuracy'] if metrics['family_accuracy'] is not None else 'N/A'}")
+        if num_families > 1:
+            print(f"Family predictions / labels: {metrics['family_prediction_counts']} / "
+                  f"{metrics['family_label_counts']}")
         print(f"Target breed ({target_name}) accuracy: {metrics['target_breed_accuracy']}")
         print(f"Non-target breed accuracy: {metrics['non_target_breed_accuracy']}")
         print(f"Overall breed accuracy: {metrics['overall_breed_accuracy']:.4f}")
+        print(f"Family/Breed test loss: {metrics['family_test_loss']:.4f} / {metrics['breed_test_loss']:.4f}")
         return metrics
 
     def _save_hierarchical_metrics(self):
@@ -250,7 +275,7 @@ class FOUL(Server):
         for client in self.clients:
             client.model = copy.deepcopy(self.global_model).to(self.device)
             if reset_optimizers:
-                client.optimizer = torch.optim.SGD(client.model.parameters(), lr=client.learning_rate)
+                client.optimizer = client.make_optimizer(client.model)
                 client.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
                     client.optimizer, gamma=self.args.learning_rate_decay_gamma
                 )
@@ -259,8 +284,8 @@ class FOUL(Server):
     @staticmethod
     def _model_delta_vector(local_model, global_model):
         deltas = []
-        local_parameters = list(local_model.parameters())
-        global_parameters = list(global_model.parameters())
+        local_parameters = [p for p in local_model.parameters() if p.requires_grad]
+        global_parameters = [p for p in global_model.parameters() if p.requires_grad]
         if len(local_parameters) != len(global_parameters):
             raise ValueError("local and global model parameter counts do not match")
         for local_parameter, global_parameter in zip(local_parameters, global_parameters):
@@ -325,9 +350,22 @@ class FOUL(Server):
 
     def _unlearn_hierarchical(self):
         target_id, target_name = self._resolve_target_breed()
+        if hasattr(self.global_model, "freeze_encoder"):
+            self.global_model.freeze_encoder()
+            for client in self.clients:
+                client._pet_feature_cache = {}
+            self._sync_hierarchical_clients(reset_optimizers=True)
         print("\n======================================")
         print("\nFED Hierarchical Unlearning Stage")
         print(f"Forget breed: {target_name} (id={target_id})")
+
+        baseline = self._evaluate_hierarchical("before_pruning")
+        minimum_accuracy = float(getattr(self.args, "min_target_accuracy", 0.1))
+        if baseline["target_breed_accuracy"] is None or baseline["target_breed_accuracy"] < minimum_accuracy:
+            raise ValueError(
+                f"Target breed accuracy before unlearning is {baseline['target_breed_accuracy']}; "
+                f"at least {minimum_accuracy:.1%} is required. Train longer before forgetting."
+            )
 
         self._compare_clip_selection(target_id, target_name)
 
@@ -357,7 +395,7 @@ class FOUL(Server):
             client.re_init(self.args)
 
         successful_updates = 0
-        for round_index in range(self.unlearn_round + 1):
+        for round_index in range(self.unlearn_round):
             round_start = time.time()
             self.current_round = round_index
             selected_clients = self.select_clients()
@@ -390,10 +428,14 @@ class FOUL(Server):
                 forget_tensor,
                 len(retain_updates) + len(forget_updates),
             )
-            model_vector = parameters_to_vector(self.global_model.parameters())
+            trainable_parameters = [
+                parameter for parameter in self.global_model.parameters()
+                if parameter.requires_grad
+            ]
+            model_vector = parameters_to_vector(trainable_parameters)
             vector_to_parameters(
                 model_vector + update.to(model_vector.device) * self.meta_lr,
-                self.global_model.parameters(),
+                trainable_parameters,
             )
             successful_updates += 1
             self.Budget.append(time.time() - round_start)
@@ -414,8 +456,15 @@ class FOUL(Server):
     def train(self):
         print("\n======================================")
         print("\nFED Learning Stage")
-        for i in range(self.learn_round + 1):
+        for i in range(self.learn_round if self._is_hierarchical() else self.learn_round + 1):
             s_t = time.time()
+            if (self._is_hierarchical() and hasattr(self.global_model, "unfreeze_last_block")
+                    and i == getattr(self.args, "pet_unfreeze_round", -1)):
+                self.global_model.unfreeze_last_block()
+                for client in self.clients:
+                    client._pet_feature_cache = {}
+                self._sync_hierarchical_clients(reset_optimizers=True)
+                print(f"Fine-tuning ResNet18 layer4 from learning round {i}")
             self.selected_clients = self.select_clients()
             self.send_models()
 
@@ -435,8 +484,15 @@ class FOUL(Server):
             self.receive_models()
             if self.dlg_eval and i % self.dlg_gap == 0:
                 self.call_dlg(i)
-            old_model = copy.deepcopy(self.global_model)
+            old_model = None if self._is_hierarchical() else copy.deepcopy(self.global_model)
             self.aggregate_parameters()
+
+            if self._is_hierarchical():
+                self.Budget.append(time.time() - s_t)
+                print('-' * 25, 'time cost', '-' * 25, self.Budget[-1])
+                if self.auto_break and self.check_done(acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt):
+                    break
+                continue
 
             """
             Metrics of gradient angles here
@@ -467,12 +523,16 @@ class FOUL(Server):
             if self.auto_break and self.check_done(acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt):
                 break
 
+        if self._is_hierarchical():
+            self._evaluate_hierarchical("after_learning")
+
         print("\nBest accuracy.")
         # self.print_(max(self.rs_test_acc), max(
         #     self.rs_train_acc), min(self.rs_train_loss))
         print(max(self.rs_test_acc))
         print("\nAverage time cost per round.")
-        print(sum(self.Budget[1:]) / len(self.Budget[1:]))
+        round_costs = self.Budget[1:] if len(self.Budget) > 1 else self.Budget
+        print(sum(round_costs) / len(round_costs))
 
         self.save_results()
         self.save_global_model()

@@ -97,6 +97,47 @@ python generate_PACS1.py iid balance -
 
 ## 🚀 Running Experiments
 
+### Oxford Pet: pretrained breed model and semantic unlearning
+
+Generate a new 224-pixel partition from the official Oxford source. Keep the
+existing 128-pixel partition for comparison; the generator will not overwrite
+an existing output directory.
+
+```bash
+cd dataset
+python generate_pet_datasets.py --dataset OxfordPet --root source/OxfordPet \
+  --output OxfordPet224/OxfordPet --num-clients 20 --image-size 224
+cd ../system
+python main.py -data OxfordPet -m CNN -algo FOUL -nc 20 -gr 40 -lmr 30 \
+  -ls 2 -lbs 32 -lm joint -beta_foul 3.5 -dev cpu -fb Chihuahua \
+  --pet-backbone resnet18 --pet-learning-rate 0.001 \
+  --pruning-rate 0.25 --min-target-accuracy 0.3 \
+  --dataset-root ../dataset/OxfordPet224
+```
+
+The ImageNet-pretrained ResNet18 is frozen by default. Each client caches its
+512-dimensional features, trains two output heads, and prunes channels in the
+trainable projection using breed-specific activation scores before unlearning.
+This keeps the residual encoder intact; pruning `fc1` reduces the trainable
+model and the cost of local unlearning updates, but does **not** shrink the
+ResNet18 encoder. The `--pruning-rate` option supports comparisons at 0.1,
+0.25, and 0.5. Different runs should use a different `-go` goal to keep their
+result files separate; the server checkpoint under `system/models/` is
+overwritten by each run.
+
+To fine-tune the last ResNet18 block after the heads have trained, add
+`--pet-unfreeze-round 20 --pet-backbone-lr 0.00001`. This phase processes raw
+images again and is much slower on CPU. The encoder is frozen before pruning
+and unlearning, using its fine-tuned weights.
+
+The experiment stops before pruning if Chihuahua test accuracy is below 30%,
+since a model that has not learned the target breed cannot demonstrate its
+forgetting. The result JSON reports family, target-breed, and non-target-breed
+accuracy and separate family/breed test losses. ImageNet pretraining may
+already encode information about Chihuahua, so the experiment measures removal
+of the Oxford training contribution, not complete removal of all prior breed
+knowledge.
+
 All experiment commands are run from the `system/` directory:
 
 ```bash

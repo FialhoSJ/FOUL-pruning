@@ -290,7 +290,13 @@ class Server(object):
         model_path = os.path.join("models", self.dataset)
         model_path = os.path.join(model_path, self.algorithm + "_server" + ".pt")
         assert (os.path.exists(model_path))
-        self.global_model = torch.load(model_path)
+        # FOUL checkpoints save the complete model object, so allow pickle
+        # only for this locally generated checkpoint and map it to the active device.
+        self.global_model = torch.load(
+            model_path,
+            map_location=self.device,
+            weights_only=False,
+        )
 
     def model_exists(self):
         model_path = os.path.join("models", self.dataset)

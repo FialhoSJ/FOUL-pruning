@@ -28,13 +28,54 @@ class clientFOUL(Client):
         super().__init__(args, id, train_samples, test_samples, **kwargs)
         self.args = args
         self.is_hierarchical = args.dataset in ("OxfordPet", "StanfordDogs")
+        if self.is_hierarchical:
+            self.learning_rate = float(getattr(args, "pet_learning_rate", 0.001))
+            self.optimizer = self.make_optimizer(self.model)
+            self.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizer, gamma=args.learning_rate_decay_gamma
+            )
+
+    def make_optimizer(self, model):
+        if self.is_hierarchical:
+            if hasattr(model, "backbone"):
+                return torch.optim.AdamW([
+                    {"params": [p for p in model.backbone.parameters() if p.requires_grad],
+                     "lr": float(getattr(self.args, "pet_backbone_lr", 1e-5))},
+                    {"params": [p for name, p in model.named_parameters()
+                                if not name.startswith("backbone.") and p.requires_grad],
+                     "lr": self.learning_rate},
+                ], weight_decay=1e-4)
+            return torch.optim.AdamW(
+                (parameter for parameter in model.parameters() if parameter.requires_grad),
+                lr=self.learning_rate,
+                weight_decay=1e-4,
+            )
+        return torch.optim.SGD(model.parameters(), lr=self.learning_rate)
 
     def _load_hierarchical_data(self, is_train=True):
+        cacheable = hasattr(self.model, "encode") and self.model.encoder_frozen
+        if cacheable:
+            feature_cache = getattr(self, "_pet_feature_cache", {})
+            if is_train in feature_cache:
+                return feature_cache[is_train]
         dataset_root = getattr(self.args, "dataset_root", "../dataset")
         data = read_hierarchical_client_data(
             self.dataset, self.id, is_train=is_train, dataset_root=dataset_root
         )
-        return TensorDataset(data["x"], data["y"], data["y_subclass"])
+        images = data["x"]
+        if cacheable:
+            self.model.eval()
+            features = []
+            for start in range(0, len(images), self.batch_size):
+                features.append(self.model.encode(
+                    images[start:start + self.batch_size].to(self.device)
+                ).cpu())
+            images = torch.cat(features) if features else torch.empty((0, 512))
+        result = TensorDataset(images, data["y"], data["y_subclass"])
+        if cacheable:
+            feature_cache[is_train] = result
+            self._pet_feature_cache = feature_cache
+        return result
 
     def _max_local_epochs(self):
         if self.train_slow and self.local_epochs > 1:
@@ -43,22 +84,28 @@ class clientFOUL(Client):
 
     def _hierarchical_step(self, model, optimizer, batch, target_breed_id=None, group="all"):
         images, families, breeds = (value.to(self.device) for value in batch)
+        if hasattr(model, "encode") and not model.encoder_frozen and images.ndim == 4:
+            flip = torch.rand(len(images), device=images.device) < 0.5
+            images = torch.where(flip[:, None, None, None], images.flip(-1), images)
+            brightness = torch.empty(len(images), 1, 1, 1, device=images.device).uniform_(0.9, 1.1)
+            images = (images * brightness).clamp_(0, 1)
+        breed_weight = float(getattr(self.args, "breed_loss_weight", 2.0))
         if group == "forget":
             mask = breeds == int(target_breed_id)
             if not torch.any(mask):
                 return 0
             images, breeds = images[mask], breeds[mask]
             _, breed_logits = model(images)
-            loss = self.loss(breed_logits, breeds)
+            loss = breed_weight * self.loss(breed_logits, breeds)
         else:
             family_logits, breed_logits = model(images)
             loss = self.loss(family_logits, families)
             if group == "retain":
                 mask = breeds != int(target_breed_id)
                 if torch.any(mask):
-                    loss = loss + self.loss(breed_logits[mask], breeds[mask])
+                    loss = loss + breed_weight * self.loss(breed_logits[mask], breeds[mask])
             else:
-                loss = loss + self.loss(breed_logits, breeds)
+                loss = loss + breed_weight * self.loss(breed_logits, breeds)
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -66,6 +113,11 @@ class clientFOUL(Client):
         return int(images.shape[0])
 
     def _train_hierarchical(self):
+        # Keep Adam moments local to the current federated round.
+        self.optimizer = self.make_optimizer(self.model)
+        self.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.optimizer, gamma=self.args.learning_rate_decay_gamma
+        )
         loader = DataLoader(
             self._load_hierarchical_data(is_train=True),
             batch_size=self.batch_size,
@@ -87,7 +139,7 @@ class clientFOUL(Client):
     def _fit_unlearning_group(self, global_model, target_breed_id, group):
         model = copy.deepcopy(global_model).to(self.device)
         model.train()
-        optimizer = torch.optim.SGD(model.parameters(), lr=self.learning_rate)
+        optimizer = self.make_optimizer(model)
         loader = DataLoader(
             self._load_hierarchical_data(is_train=True),
             batch_size=self.batch_size,
@@ -182,6 +234,15 @@ class clientFOUL(Client):
             self.model.train(was_training)
 
         return summaries
+
+    def re_init(self, args):
+        if not self.is_hierarchical:
+            return super().re_init(args)
+        if args.re_init:
+            self.optimizer = self.make_optimizer(self.model)
+            self.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                self.optimizer, gamma=args.learning_rate_decay_gamma
+            )
 
     def train(self):
         if self.is_hierarchical:

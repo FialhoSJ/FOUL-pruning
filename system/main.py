@@ -32,7 +32,7 @@ from flcore.servers.serverfoul import FOUL
 from flcore.servers.serverufoul import UFOUL
 from flcore.servers.serverretrain import Retrain
 from flcore.servers.serverconda import CONDA
-from flcore.servers.serverMODE import ServerMoDe
+from flcore.servers.servermode import MODE
 
 
 from flcore.trainmodel.models import *
@@ -44,6 +44,7 @@ from flcore.trainmodel.uresnet import *
 from flcore.trainmodel.mobilenet_v2 import *
 from flcore.trainmodel.transformer import *
 from flcore.trainmodel.hierarchical_cnn import HierarchicalCNN
+from flcore.trainmodel.hierarchical_resnet import HierarchicalResNet18
 
 from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
@@ -69,6 +70,24 @@ def run(args):
         is_hierarchical = args.dataset in ("OxfordPet", "StanfordDogs")
         hierarchy_config = None
         if is_hierarchical:
+            if min(args.pet_learning_rate, args.pet_backbone_lr, args.breed_loss_weight) <= 0:
+                raise ValueError("Pet learning rates and breed loss weight must be positive")
+            if args.pet_pool_grid < 1:
+                raise ValueError("--pet-pool-grid must be positive")
+            if not 0 <= args.min_target_accuracy <= 1:
+                raise ValueError("--min-target-accuracy must be between 0 and 1")
+            if not 0 < args.pruning_rate < 1:
+                raise ValueError("--pruning-rate must be between 0 and 1")
+            if args.pet_unfreeze_round < -1 or args.pet_unfreeze_round >= args.learn_mode_rounds:
+                raise ValueError("--pet-unfreeze-round must be -1 or a learning round")
+            if args.pet_backbone == "cnn" and args.pet_unfreeze_round >= 0:
+                raise ValueError("--pet-unfreeze-round requires --pet-backbone resnet18")
+            if args.learn_mode == "joint" and not 0 < args.learn_mode_rounds < args.global_rounds:
+                raise ValueError("Joint pet runs need learning rounds between 1 and global_rounds - 1")
+            if args.learn_mode == "learn" and args.learn_mode_rounds < 1:
+                raise ValueError("Pet learning needs at least one learning round")
+            if args.learn_mode == "unlearn" and args.global_rounds <= args.learn_mode_rounds:
+                raise ValueError("Pet unlearning needs at least one unlearning round")
             config_path = os.path.join(args.dataset_root, args.dataset, "config.json")
             if not os.path.isfile(config_path):
                 raise FileNotFoundError(
@@ -89,11 +108,21 @@ def run(args):
                 )
             args.num_classes = len(hierarchy_config["family_to_idx"])
             args.num_breeds = len(hierarchy_config["breed_to_idx"])
-            args.model = HierarchicalCNN(
-                num_families=args.num_classes,
-                num_breeds=args.num_breeds,
-                image_size=configured_image_size,
-            ).to(args.device)
+            if args.pet_backbone == "resnet18":
+                args.model = HierarchicalResNet18(
+                    num_families=args.num_classes,
+                    num_breeds=args.num_breeds,
+                    image_size=configured_image_size,
+                ).to(args.device)
+            else:
+                args.model = HierarchicalCNN(
+                    num_families=args.num_classes,
+                    num_breeds=args.num_breeds,
+                    image_size=configured_image_size,
+                    pool_grid=args.pet_pool_grid,
+                ).to(args.device)
+            print(f"Pet training: {args.pet_backbone}, AdamW, head lr={args.pet_learning_rate}, "
+                  f"breed weight={args.breed_loss_weight}")
         # Generate args.model
         elif model_str == "mlr":  # convex
             if "MNIST" in args.dataset:
@@ -264,7 +293,7 @@ def run(args):
             args.head = copy.deepcopy(args.model.fc)
             args.model.fc = nn.Identity()
             args.model = BaseHeadSplit(args.model, args.head)
-            server = ServerMoDe(args, i)
+            server = MODE(args, i)
         elif args.algorithm == 'FUSED':
             from flcore.servers.serverFUSED import FUSED
             args.head = copy.deepcopy(args.model.fc)
@@ -458,6 +487,20 @@ if __name__ == "__main__":
                         help='Annotated pet breed name or breed ID to forget')
     parser.add_argument('--pruning-rate', type=float, default=0.5,
                         help='Fraction of target-discriminative channels removed before FOUL')
+    parser.add_argument('--pet-learning-rate', type=float, default=0.001,
+                        help='AdamW learning rate for OxfordPet and StanfordDogs')
+    parser.add_argument('--pet-backbone', choices=('resnet18', 'cnn'), default='resnet18',
+                        help='Pet image encoder; resnet18 uses ImageNet pretrained weights')
+    parser.add_argument('--pet-backbone-lr', type=float, default=1e-5,
+                        help='Learning rate when fine-tuning ResNet18 layer4')
+    parser.add_argument('--pet-unfreeze-round', type=int, default=-1,
+                        help='Learning round to fine-tune ResNet18 layer4; -1 keeps it frozen')
+    parser.add_argument('--breed-loss-weight', type=float, default=2.0,
+                        help='Weight of breed classification loss during pet training')
+    parser.add_argument('--pet-pool-grid', type=int, default=4,
+                        help='Spatial grid retained before the pet classification heads')
+    parser.add_argument('--min-target-accuracy', type=float, default=0.3,
+                        help='Minimum pre-unlearning target accuracy required to start pruning')
     parser.add_argument('--clip-compare', action='store_true',
                         help='Compare an optional CLIP-selected visual cluster with breed labels')
     parser.add_argument('--clip-prompt', type=str, default=None,

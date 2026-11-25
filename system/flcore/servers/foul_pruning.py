@@ -3,6 +3,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import copy
 
 
 def aggregate_activation_summaries(client_summaries):
@@ -118,9 +119,13 @@ def _copy_linear(old_layer, in_indices, out_indices=None):
 
 
 def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate=0.5):
-    """Physically shrink HierarchicalCNN channels using FCUP target scores."""
+    """Physically shrink eligible target-discriminative channels."""
     if not 0 < pruning_rate < 1:
         raise ValueError("pruning_rate must be between 0 and 1")
+    if hasattr(model, "backbone") and hasattr(model, "fc1"):
+        return _prune_resnet_projection(
+            model, class_activation_summaries, target_breed_id, pruning_rate
+        )
     required_layers = ("conv1", "conv2", "conv3", "fc1")
     model_layers = dict(model.feature_layers())
     if any(name not in model_layers for name in required_layers):
@@ -132,11 +137,21 @@ def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate
                                  else layer.out_features, pruning_rate)
         for name, layer in model.feature_layers()
     }
+    grid = model.global_pool.output_size
+    if isinstance(grid, int):
+        grid = (grid, grid)
+    spatial_size = int(grid[0]) * int(grid[1])
+    if model.fc1.in_features != model.conv3.out_channels * spatial_size:
+        raise ValueError("fc1 input width does not match pooled conv3 channels")
+    pooled_indices = torch.cat([
+        torch.arange(int(channel) * spatial_size, (int(channel) + 1) * spatial_size)
+        for channel in keep["conv3"]
+    ])
     compact = model.__class__(**model.compact_config()).to(next(model.parameters()).device)
     compact.conv1 = _copy_conv(model.conv1, torch.arange(3), keep["conv1"])
     compact.conv2 = _copy_conv(model.conv2, keep["conv1"], keep["conv2"])
     compact.conv3 = _copy_conv(model.conv3, keep["conv2"], keep["conv3"])
-    compact.fc1 = _copy_linear(model.fc1, keep["conv3"], keep["fc1"])
+    compact.fc1 = _copy_linear(model.fc1, pooled_indices, keep["fc1"])
     compact.family_head = _copy_linear(
         model.family_head, keep["fc1"], torch.arange(model.family_head.out_features)
     )
@@ -160,7 +175,7 @@ def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate
         raise ValueError("compact conv1/conv2 channel dimensions do not match")
     if compact.conv3.in_channels != compact.conv2.out_channels:
         raise ValueError("compact conv2/conv3 channel dimensions do not match")
-    if compact.fc1.in_features != compact.conv3.out_channels:
+    if compact.fc1.in_features != compact.conv3.out_channels * spatial_size:
         raise ValueError("compact conv3/fc1 dimensions do not match")
     if compact.family_head.in_features != compact.fc1.out_features:
         raise ValueError("compact family head input width does not match fc1")
@@ -171,3 +186,29 @@ def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate
         if width < 1:
             raise ValueError(f"pruning removed every feature from {name}")
     return compact, counts
+
+
+def _prune_resnet_projection(model, summaries, target_breed_id, pruning_rate):
+    """Prune the trainable projection, leaving residual connections intact."""
+    if tuple(name for name, _ in model.feature_layers()) != ("fc1",):
+        raise TypeError("Unsupported pretrained backbone feature layers")
+    scores = tfidf_channel_scores(summaries, target_breed_id)["fc1"]
+    keep = _selected_channels(scores, model.fc1.out_features, pruning_rate)
+    compact = copy.deepcopy(model)
+    compact.fc1 = _copy_linear(model.fc1, torch.arange(model.fc1.in_features), keep)
+    compact.family_head = _copy_linear(
+        model.family_head, keep, torch.arange(model.family_head.out_features)
+    )
+    compact.breed_head = _copy_linear(
+        model.breed_head, keep, torch.arange(model.breed_head.out_features)
+    )
+    compact.hidden_dim = len(keep)
+    compact.train(model.training)
+    if compact.fc1.out_features != compact.family_head.in_features or \
+            compact.fc1.out_features != compact.breed_head.in_features:
+        raise ValueError("Compact projection and output heads have incompatible shapes")
+    return compact, {"fc1": {
+        "before": model.fc1.out_features,
+        "kept": len(keep),
+        "removed": model.fc1.out_features - len(keep),
+    }}
