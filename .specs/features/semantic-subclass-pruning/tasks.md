@@ -160,6 +160,8 @@ T7 -> T8
 **Tests**: none  
 **Gate**: quick
 
+**Status**: Complete - `python3 -m py_compile system/flcore/clients/clientfoul.py` succeeded.
+
 ### T6: Add federated class-discriminative structural pruning
 
 **What**: Implement FCUP activation aggregation, TF-IDF ranking, and physical model shrinking at the selected 50% rate.  
