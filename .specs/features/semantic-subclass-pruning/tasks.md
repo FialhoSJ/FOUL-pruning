@@ -180,6 +180,8 @@ T7 -> T8
 **Tests**: none  
 **Gate**: quick
 
+**Status**: Complete - `python3 -m py_compile system/flcore/servers/foul_pruning.py` succeeded.
+
 ### T7: Integrate sample-group FOUL aggregation and metrics
 
 **What**: Add hierarchical unlearning rounds, pruning/synchronization, checkpoint saving, and parent/subclass metrics while preserving legacy FOUL behavior.  
