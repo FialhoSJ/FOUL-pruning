@@ -202,6 +202,8 @@ T7 -> T8
 **Tests**: none  
 **Gate**: quick
 
+**Status**: Complete - `python3 -m py_compile system/flcore/servers/serverfoul.py` and the phase build succeeded.
+
 ### T8: Wire dataset and target options into the CLI
 
 **What**: Add Oxford/Stanford dataset selection, breed target, pruning amount, image size, and optional CLIP comparison arguments.  
@@ -219,6 +221,8 @@ T7 -> T8
 
 **Tests**: none  
 **Gate**: build
+
+**Status**: In progress.
 
 ## Checks
 

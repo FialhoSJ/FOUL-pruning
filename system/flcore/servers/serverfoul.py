@@ -16,6 +16,8 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 import time
+import json
+import os
 from flcore.clients.clientfoul import clientFOUL
 from flcore.servers.serverbase import Server
 from utils.model_utils import ParamDict
@@ -29,6 +31,9 @@ import statistics
 
 from torch.utils.tensorboard import SummaryWriter
 import wandb
+from utils.hierarchical_data import read_hierarchical_client_data
+from utils.clip_breed_compare import compare_prompt_cluster
+from flcore.servers.foul_pruning import aggregate_activation_summaries, prune_model
 
 class FOUL(Server):
     def __init__(self, args, times):
@@ -47,7 +52,10 @@ class FOUL(Server):
         if self.unlearn_round < 0:
             raise ValueError("The global rounds must be higher than learn round")
 
-        # self.load_model()
+        # A standalone unlearning run continues from the model saved by the
+        # learning stage. Joint runs keep using the in-memory trained model.
+        if args.learn_mode == 'unlearn':
+            self.load_model()
         self.Budget = []
         self.update_grads = None
         self.foul_c = args.c_parameter
@@ -61,6 +69,344 @@ class FOUL(Server):
         self.device = args.device
         self.fgrad_balance = args.forget_balance
         self.rgrad_balance = args.retain_balance
+        self.hierarchical_metrics = []
+        self.pruning_counts = None
+        self.clip_comparison = None
+        self._target_breed_cache = None
+
+    def FUL_evaluate(self, acc=None, loss=None):
+        if self._is_hierarchical():
+            return self._evaluate_hierarchical("evaluation")
+        return super().FUL_evaluate(acc=acc, loss=loss)
+
+    def set_clients(self, clientObj):
+        if not self._is_hierarchical():
+            return super().set_clients(clientObj)
+        dataset_root = getattr(self.args, "dataset_root", "../dataset")
+        for client_id, train_slow, send_slow in zip(
+            range(self.num_clients), self.train_slow_clients, self.send_slow_clients
+        ):
+            train_data = read_hierarchical_client_data(
+                self.dataset, client_id, is_train=True, dataset_root=dataset_root
+            )
+            test_data = read_hierarchical_client_data(
+                self.dataset, client_id, is_train=False, dataset_root=dataset_root
+            )
+            client = clientObj(
+                self.args,
+                id=client_id,
+                train_samples=len(train_data["y"]),
+                test_samples=len(test_data["y"]),
+                train_slow=train_slow,
+                send_slow=send_slow,
+            )
+            self.clients.append(client)
+
+    def _is_hierarchical(self):
+        return self.dataset in ("OxfordPet", "StanfordDogs")
+
+    def _hierarchical_config(self):
+        dataset_root = getattr(self.args, "dataset_root", "../dataset")
+        config_path = os.path.join(dataset_root, self.dataset, "config.json")
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"Missing pet dataset config: {config_path}")
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            return json.load(config_file)
+
+    def _resolve_target_breed(self):
+        if self._target_breed_cache is not None:
+            return self._target_breed_cache
+        config = self._hierarchical_config()
+        breed_to_idx = config.get("breed_to_idx", {})
+        requested = getattr(self.args, "forget_breed", None)
+        if requested is None:
+            requested = getattr(self.args, "forget_class", None)
+        if requested is None:
+            raise ValueError("Set -forget_breed to an annotated breed name or numeric breed ID")
+
+        name_to_id = {str(name).casefold(): int(index) for name, index in breed_to_idx.items()}
+        requested_text = str(requested).strip()
+        if requested_text.casefold() in name_to_id:
+            target_id = name_to_id[requested_text.casefold()]
+            target_name = next(name for name, index in breed_to_idx.items() if int(index) == target_id)
+        else:
+            try:
+                target_id = int(requested_text)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unknown breed {requested!r}; available breeds: {', '.join(sorted(breed_to_idx))}"
+                ) from exc
+            target_by_id = {int(index): name for name, index in breed_to_idx.items()}
+            if target_id not in target_by_id:
+                raise ValueError(
+                    f"Unknown breed ID {target_id}; valid IDs are 0 through {len(target_by_id) - 1}"
+                )
+            target_name = target_by_id[target_id]
+
+        self._target_breed_cache = (target_id, target_name)
+        return self._target_breed_cache
+
+    def _evaluate_hierarchical(self, stage):
+        target_id, target_name = self._resolve_target_breed()
+        dataset_root = getattr(self.args, "dataset_root", "../dataset")
+        config = self._hierarchical_config()
+        num_families = len(config["family_to_idx"])
+        totals = {
+            "samples": 0,
+            "breed_correct": 0,
+            "family_correct": 0,
+            "family_samples": 0,
+            "target_correct": 0,
+            "target_samples": 0,
+            "other_correct": 0,
+            "other_samples": 0,
+            "loss_sum": 0.0,
+        }
+        self.global_model.eval()
+        with torch.no_grad():
+            for client in self.clients:
+                data = read_hierarchical_client_data(
+                    self.dataset, client.id, is_train=False, dataset_root=dataset_root
+                )
+                images, families, breeds = data["x"], data["y"], data["y_subclass"]
+                for start in range(0, len(images), self.batch_size):
+                    end = start + self.batch_size
+                    x = images[start:end].to(self.device)
+                    family = families[start:end].to(self.device)
+                    breed = breeds[start:end].to(self.device)
+                    family_logits, breed_logits = self.global_model(x)
+                    breed_prediction = breed_logits.argmax(dim=1)
+                    breed_correct = breed_prediction == breed
+                    totals["samples"] += len(breed)
+                    totals["breed_correct"] += int(breed_correct.sum().item())
+                    totals["loss_sum"] += float(
+                        (self.loss(family_logits, family) + self.loss(breed_logits, breed)).item()
+                        * len(breed)
+                    )
+                    if num_families > 1:
+                        totals["family_samples"] += len(family)
+                        totals["family_correct"] += int((family_logits.argmax(dim=1) == family).sum().item())
+                    target_mask = breed == target_id
+                    other_mask = ~target_mask
+                    totals["target_samples"] += int(target_mask.sum().item())
+                    totals["other_samples"] += int(other_mask.sum().item())
+                    totals["target_correct"] += int((breed_correct & target_mask).sum().item())
+                    totals["other_correct"] += int((breed_correct & other_mask).sum().item())
+
+        if totals["samples"] == 0:
+            raise ValueError("The pet dataset has no test examples")
+        metrics = {
+            "stage": stage,
+            "round": int(getattr(self, "current_round", 0)),
+            "target_breed": target_name,
+            "target_breed_accuracy": (
+                totals["target_correct"] / totals["target_samples"] if totals["target_samples"] else None
+            ),
+            "target_breed_samples": totals["target_samples"],
+            "non_target_breed_accuracy": (
+                totals["other_correct"] / totals["other_samples"] if totals["other_samples"] else None
+            ),
+            "non_target_breed_samples": totals["other_samples"],
+            "family_accuracy": (
+                totals["family_correct"] / totals["family_samples"] if totals["family_samples"] else None
+            ),
+            "overall_breed_accuracy": totals["breed_correct"] / totals["samples"],
+            "test_loss": totals["loss_sum"] / totals["samples"],
+        }
+        self.rs_test_acc.append(metrics["overall_breed_accuracy"])
+        self.rs_train_loss.append(metrics["test_loss"])
+        self.hierarchical_metrics.append(metrics)
+
+        print(f"Family accuracy: {metrics['family_accuracy'] if metrics['family_accuracy'] is not None else 'N/A'}")
+        print(f"Target breed ({target_name}) accuracy: {metrics['target_breed_accuracy']}")
+        print(f"Non-target breed accuracy: {metrics['non_target_breed_accuracy']}")
+        print(f"Overall breed accuracy: {metrics['overall_breed_accuracy']:.4f}")
+        return metrics
+
+    def _save_hierarchical_metrics(self):
+        if not self.hierarchical_metrics:
+            return
+        results_dir = "../results"
+        os.makedirs(results_dir, exist_ok=True)
+        output_path = os.path.join(
+            results_dir,
+            f"{self.dataset}_{self.algorithm}_{self.goal}_{self.times}_hierarchy.json",
+        )
+        with open(output_path, "w", encoding="utf-8") as result_file:
+            json.dump(
+                {
+                    "metrics": self.hierarchical_metrics,
+                    "pruning_counts": self.pruning_counts,
+                    "clip_comparison": self.clip_comparison,
+                },
+                result_file,
+                indent=2,
+            )
+
+    def _sync_hierarchical_clients(self, reset_optimizers=False):
+        for client in self.clients:
+            client.model = copy.deepcopy(self.global_model).to(self.device)
+            if reset_optimizers:
+                client.optimizer = torch.optim.SGD(client.model.parameters(), lr=client.learning_rate)
+                client.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                    client.optimizer, gamma=self.args.learning_rate_decay_gamma
+                )
+                client.learning_rate_decay = self.args.learning_rate_decay
+
+    @staticmethod
+    def _model_delta_vector(local_model, global_model):
+        deltas = []
+        local_parameters = list(local_model.parameters())
+        global_parameters = list(global_model.parameters())
+        if len(local_parameters) != len(global_parameters):
+            raise ValueError("local and global model parameter counts do not match")
+        for local_parameter, global_parameter in zip(local_parameters, global_parameters):
+            if local_parameter.shape != global_parameter.shape:
+                raise ValueError("local and global model parameter shapes do not match")
+            deltas.append((local_parameter.detach() - global_parameter.detach()).reshape(-1))
+        return torch.cat(deltas).cpu()
+
+    def _compare_clip_selection(self, target_id, target_name):
+        if not getattr(self.args, "clip_compare", False):
+            return
+        config = self._hierarchical_config()
+        family_id = config["parent_by_breed"][str(target_id)]
+        dataset_root = getattr(self.args, "dataset_root", "../dataset")
+        images_by_breed = {}
+        for client in self.clients:
+            data = read_hierarchical_client_data(
+                self.dataset, client.id, is_train=True, dataset_root=dataset_root
+            )
+            same_family = data["y"] == family_id
+            for image, breed in zip(data["x"][same_family], data["y_subclass"][same_family]):
+                images_by_breed.setdefault(int(breed), []).append(image)
+
+        target_images = images_by_breed.get(target_id, [])
+        if not target_images:
+            raise ValueError(f"CLIP comparison found no examples for target breed {target_name}")
+        max_samples = max(int(getattr(self.args, "clip_max_samples", 1000)), 2)
+        rng = np.random.default_rng(int(getattr(self.args, "seed", 1)))
+        target_cap = max(1, max_samples // 2)
+        target_indices = rng.permutation(len(target_images))[:target_cap]
+        selected_images = [target_images[int(index)] for index in target_indices]
+        selected_labels = [target_id] * len(selected_images)
+
+        other_images = [
+            (breed_id, image)
+            for breed_id in sorted(images_by_breed)
+            if breed_id != target_id
+            for image in images_by_breed[breed_id]
+        ]
+        remaining = max_samples - len(selected_images)
+        if remaining > 0 and other_images:
+            other_indices = rng.permutation(len(other_images))[:remaining]
+            for index in other_indices:
+                breed_id, image = other_images[int(index)]
+                selected_images.append(image)
+                selected_labels.append(breed_id)
+        if len(selected_images) < 2:
+            raise ValueError("CLIP comparison needs at least two images from the target family")
+
+        prompt = getattr(self.args, "clip_prompt", None) or f"a photo of a {target_name}"
+        clusters = min(int(getattr(self.args, "clip_clusters", 5)), len(selected_images))
+        self.clip_comparison = compare_prompt_cluster(
+            torch.stack(selected_images),
+            selected_labels,
+            target_id,
+            prompt,
+            num_clusters=clusters,
+            batch_size=self.batch_size,
+            device=self.device,
+        )
+        print(f"CLIP prompt/cluster comparison: {self.clip_comparison}")
+
+    def _unlearn_hierarchical(self):
+        target_id, target_name = self._resolve_target_breed()
+        print("\n======================================")
+        print("\nFED Hierarchical Unlearning Stage")
+        print(f"Forget breed: {target_name} (id={target_id})")
+
+        self._compare_clip_selection(target_id, target_name)
+
+        self._sync_hierarchical_clients()
+        summaries = [client.class_activation_summaries() for client in self.clients]
+        aggregated_summaries = aggregate_activation_summaries(summaries)
+        reference_layer = next(iter(aggregated_summaries.values()))
+        all_samples = sum(reference_layer["counts"].values())
+        target_samples = reference_layer["counts"].get(target_id, 0)
+        if all_samples == 0 or target_samples == 0:
+            raise ValueError(
+                f"Target breed {target_name} has no federated training samples; "
+                "the trained checkpoint was not changed"
+            )
+
+        rate = float(getattr(self.args, "pruning_rate", 0.5))
+        compact_model, self.pruning_counts = prune_model(
+            self.global_model, aggregated_summaries, target_id, pruning_rate=rate
+        )
+        self.global_model = compact_model.to(self.device)
+        self._sync_hierarchical_clients(reset_optimizers=True)
+        print(f"Pruning rate: {rate:.0%}")
+        print(f"Pruning counts: {self.pruning_counts}")
+        self._evaluate_hierarchical("after_pruning")
+
+        for client in self.clients:
+            client.re_init(self.args)
+
+        successful_updates = 0
+        for round_index in range(self.unlearn_round + 1):
+            round_start = time.time()
+            self.current_round = round_index
+            selected_clients = self.select_clients()
+            self.selected_clients = selected_clients
+            self.send_models()
+
+            if round_index % self.eval_gap == 0:
+                print(f"\n-------------Unlearning round: {round_index}-------------")
+                self._evaluate_hierarchical("unlearning")
+
+            retain_updates, forget_updates = [], []
+            for client in selected_clients:
+                groups = client.unlearning_group_updates(self.global_model, target_id)
+                if groups["retain_model"] is not None:
+                    retain_updates.append(self._model_delta_vector(groups["retain_model"], self.global_model))
+                if groups["forget_model"] is not None:
+                    forget_updates.append(self._model_delta_vector(groups["forget_model"], self.global_model))
+
+            if not forget_updates:
+                print("No selected client has target-breed samples this round; skipping model update.")
+                self.Budget.append(time.time() - round_start)
+                continue
+            if not retain_updates:
+                raise ValueError("No retain update was produced; compact checkpoint was not saved")
+
+            retain_tensor = torch.stack(retain_updates)
+            forget_tensor = torch.stack(forget_updates)
+            update = self.foul_update(
+                retain_tensor,
+                forget_tensor,
+                len(retain_updates) + len(forget_updates),
+            )
+            model_vector = parameters_to_vector(self.global_model.parameters())
+            vector_to_parameters(
+                model_vector + update.to(model_vector.device) * self.meta_lr,
+                self.global_model.parameters(),
+            )
+            successful_updates += 1
+            self.Budget.append(time.time() - round_start)
+            print("Completed sample-group FOUL aggregation.")
+
+            if self.auto_break and self.check_done(acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt):
+                break
+
+        if successful_updates == 0:
+            raise ValueError("No FOUL update completed; compact checkpoint was not saved")
+        self._sync_hierarchical_clients()
+        self._evaluate_hierarchical("after_unlearning")
+        self.save_results()
+        self.save_global_model()
+        self._save_hierarchical_metrics()
+        print(f"Compact unlearned model saved; per-layer channels: {self.pruning_counts}")
 
     def train(self):
         print("\n======================================")
@@ -127,6 +473,8 @@ class FOUL(Server):
 
         self.save_results()
         self.save_global_model()
+        if self._is_hierarchical():
+            self._save_hierarchical_metrics()
 
         if self.num_new_clients > 0:
             self.eval_new_clients = True
@@ -146,6 +494,10 @@ class FOUL(Server):
                                                 ##  need to specify right ??????
                 client.unlearn()
         """
+        if self._is_hierarchical():
+            self._unlearn_hierarchical()
+            return
+
         ### Init Everything
         for client in self.clients:
             client.re_init(self.args)
@@ -404,7 +756,7 @@ class FOUL(Server):
                       ).view(-1, 1)
         g /= (1 + self.foul_c ** 2)
 
-        return (g.squeeze()).cuda()
+        return g.squeeze().to(self.device)
 
 #     def aggregate_foul(self):
 #         grad_ez = sum(p.numel() for p in self.global_model.parameters())
