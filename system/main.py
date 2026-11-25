@@ -17,6 +17,7 @@
 
 # !/usr/bin/env python
 import copy
+import json
 import torch
 import argparse
 import os
@@ -42,6 +43,7 @@ from flcore.trainmodel.alexnet import *
 from flcore.trainmodel.uresnet import *
 from flcore.trainmodel.mobilenet_v2 import *
 from flcore.trainmodel.transformer import *
+from flcore.trainmodel.hierarchical_cnn import HierarchicalCNN
 
 from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
@@ -63,8 +65,37 @@ def run(args):
         print("Creating server and clients ...")
         start = time.time()
 
+        # Pet datasets use aligned family/breed labels and a two-head model.
+        is_hierarchical = args.dataset in ("OxfordPet", "StanfordDogs")
+        hierarchy_config = None
+        if is_hierarchical:
+            config_path = os.path.join(args.dataset_root, args.dataset, "config.json")
+            if not os.path.isfile(config_path):
+                raise FileNotFoundError(
+                    f"Dataset config not found: {config_path}. Generate the federated pet dataset first."
+                )
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                hierarchy_config = json.load(config_file)
+            if args.num_clients != int(hierarchy_config["num_clients"]):
+                raise ValueError(
+                    f"-nc {args.num_clients} does not match the generated dataset's "
+                    f"{hierarchy_config['num_clients']} clients"
+                )
+            configured_image_size = int(hierarchy_config["image_size"])
+            if args.image_size is not None and args.image_size != configured_image_size:
+                raise ValueError(
+                    f"--image-size {args.image_size} does not match generated data size "
+                    f"{configured_image_size}; regenerate the data to change it"
+                )
+            args.num_classes = len(hierarchy_config["family_to_idx"])
+            args.num_breeds = len(hierarchy_config["breed_to_idx"])
+            args.model = HierarchicalCNN(
+                num_families=args.num_classes,
+                num_breeds=args.num_breeds,
+                image_size=configured_image_size,
+            ).to(args.device)
         # Generate args.model
-        if model_str == "mlr":  # convex
+        elif model_str == "mlr":  # convex
             if "MNIST" in args.dataset:
                 args.model = Mclr_Logistic(1 * 28 * 28, num_classes=args.num_classes).to(args.device)
             elif "Cifar10" in args.dataset:
@@ -181,16 +212,39 @@ def run(args):
         print(args.model)
 
         # select algorithm
+        if is_hierarchical and args.algorithm != "FOUL":
+            raise ValueError("OxfordPet and StanfordDogs currently require -algo FOUL")
         if args.algorithm == "FedAvg":
             args.head = copy.deepcopy(args.model.fc)
             args.model.fc = nn.Identity()
             args.model = BaseHeadSplit(args.model, args.head)
             server = FedAvg(args, i)
         elif args.algorithm == 'FOUL':
-            args.head = copy.deepcopy(args.model.fc)
-            args.model.fc = nn.Identity()
-            args.model = BaseHeadSplit(args.model, args.head)
-            server = FOUL(args, i)
+            if is_hierarchical:
+                requested = args.forget_breed
+                if requested is None:
+                    raise ValueError("Set --forget-breed to an Oxford/Stanford breed")
+                breed_map = hierarchy_config["breed_to_idx"]
+                valid_names = {name.casefold(): int(index) for name, index in breed_map.items()}
+                request_text = str(requested).strip()
+                if request_text.casefold() in valid_names:
+                    args.forget_breed = str(requested).strip()
+                else:
+                    try:
+                        breed_id = int(request_text)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Unknown breed {requested!r}; choose a breed name or numeric ID"
+                        ) from exc
+                    if breed_id not in set(valid_names.values()):
+                        raise ValueError(f"Unknown breed ID {breed_id}")
+                    args.forget_breed = request_text
+                server = FOUL(args, i)
+            else:
+                args.head = copy.deepcopy(args.model.fc)
+                args.model.fc = nn.Identity()
+                args.model = BaseHeadSplit(args.model, args.head)
+                server = FOUL(args, i)
         elif args.algorithm == 'UFOUL':
             args.head = copy.deepcopy(args.model.fc)
             args.model.fc = nn.Identity()
@@ -396,6 +450,24 @@ if __name__ == "__main__":
                         help="Domain ID to unlearn (0-3 for PACS: 0=art_painting, 1=cartoon, 2=photo, 3=sketch)")
     parser.add_argument('-fc', "--forget_class", type=int, default=None,
                         help="Class label to forget (for class-level unlearning)")
+    parser.add_argument('--dataset-root', type=str, default='../dataset',
+                        help='Root containing OxfordPet/StanfordDogs generated client data')
+    parser.add_argument('--image-size', type=int, default=None,
+                        help='Validate image size against the generated pet dataset config')
+    parser.add_argument('-fb', '--forget-breed', dest='forget_breed', type=str, default=None,
+                        help='Annotated pet breed name or breed ID to forget')
+    parser.add_argument('--pruning-rate', type=float, default=0.5,
+                        help='Fraction of target-discriminative channels removed before FOUL')
+    parser.add_argument('--clip-compare', action='store_true',
+                        help='Compare an optional CLIP-selected visual cluster with breed labels')
+    parser.add_argument('--clip-prompt', type=str, default=None,
+                        help='Text prompt used for the optional CLIP comparison')
+    parser.add_argument('--clip-clusters', type=int, default=5,
+                        help='Number of visual clusters for the optional CLIP comparison')
+    parser.add_argument('--clip-max-samples', type=int, default=1000,
+                        help='Maximum family-matched images encoded by optional CLIP comparison')
+    parser.add_argument('--seed', type=int, default=1,
+                        help='Random seed used for optional CLIP comparison sampling')
 
     
     parser.add_argument('-wb', "--use_wandb", action='store_true',
