@@ -139,6 +139,8 @@ T7 -> T8
 **Tests**: none  
 **Gate**: quick
 
+**Status**: Complete - `python3 -m py_compile system/utils/clip_breed_compare.py` succeeded.
+
 ### T5: Train and split sample-group updates in the FOUL client
 
 **What**: Extend the FOUL client for two-head loss and per-client breed-based retain/forget updates.  
