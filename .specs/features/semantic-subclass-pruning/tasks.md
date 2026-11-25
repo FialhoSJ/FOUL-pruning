@@ -120,6 +120,8 @@ T7 -> T8
 **Tests**: none  
 **Gate**: quick
 
+**Status**: Complete - `python3 -m py_compile system/flcore/trainmodel/hierarchical_cnn.py` succeeded.
+
 ### T4: Add optional CLIP comparison with breed labels
 
 **What**: Add lazy CLIP prompt comparison for annotated breed membership without changing the ground-truth forget set.  
