@@ -1,0 +1,260 @@
+method,breed,test_samples,correct,accuracy
+Original,Abyssinian,98,70,0.7142857142857143
+Original,American Bulldog,100,74,0.74
+Original,American Pit Bull Terrier,100,42,0.42
+Original,Basset Hound,100,79,0.79
+Original,Beagle,100,78,0.78
+Original,Bengal,100,76,0.76
+Original,Birman,100,53,0.53
+Original,Bombay,88,74,0.8409090909090909
+Original,Boxer,99,84,0.8484848484848485
+Original,British Shorthair,100,68,0.68
+Original,Chihuahua,100,69,0.69
+Original,Egyptian Mau,97,76,0.7835051546391752
+Original,English Cocker Spaniel,100,76,0.76
+Original,English Setter,100,88,0.88
+Original,German Shorthaired,100,84,0.84
+Original,Great Pyrenees,100,90,0.9
+Original,Havanese,100,86,0.86
+Original,Japanese Chin,100,85,0.85
+Original,Keeshond,99,91,0.9191919191919192
+Original,Leonberger,100,89,0.89
+Original,Maine Coon,100,74,0.74
+Original,Miniature Pinscher,100,74,0.74
+Original,Newfoundland,100,89,0.89
+Original,Persian,100,75,0.75
+Original,Pomeranian,100,83,0.83
+Original,Pug,100,85,0.85
+Original,Ragdoll,100,70,0.7
+Original,Russian Blue,100,72,0.72
+Original,Saint Bernard,100,81,0.81
+Original,Samoyed,100,95,0.95
+Original,Scottish Terrier,99,92,0.9292929292929293
+Original,Shiba Inu,100,87,0.87
+Original,Siamese,100,83,0.83
+Original,Sphynx,100,84,0.84
+Original,Staffordshire Bull Terrier,89,39,0.43820224719101125
+Original,Wheaten Terrier,100,75,0.75
+Original,Yorkshire Terrier,100,86,0.86
+Referencia,Abyssinian,98,69,0.7040816326530612
+Referencia,American Bulldog,100,75,0.75
+Referencia,American Pit Bull Terrier,100,49,0.49
+Referencia,Basset Hound,100,71,0.71
+Referencia,Beagle,100,80,0.8
+Referencia,Bengal,100,79,0.79
+Referencia,Birman,100,57,0.57
+Referencia,Bombay,88,71,0.8068181818181818
+Referencia,Boxer,99,88,0.8888888888888888
+Referencia,British Shorthair,100,69,0.69
+Referencia,Chihuahua,100,0,0.0
+Referencia,Egyptian Mau,97,75,0.7731958762886598
+Referencia,English Cocker Spaniel,100,78,0.78
+Referencia,English Setter,100,81,0.81
+Referencia,German Shorthaired,100,84,0.84
+Referencia,Great Pyrenees,100,88,0.88
+Referencia,Havanese,100,85,0.85
+Referencia,Japanese Chin,100,84,0.84
+Referencia,Keeshond,99,90,0.9090909090909091
+Referencia,Leonberger,100,90,0.9
+Referencia,Maine Coon,100,73,0.73
+Referencia,Miniature Pinscher,100,74,0.74
+Referencia,Newfoundland,100,88,0.88
+Referencia,Persian,100,72,0.72
+Referencia,Pomeranian,100,82,0.82
+Referencia,Pug,100,86,0.86
+Referencia,Ragdoll,100,71,0.71
+Referencia,Russian Blue,100,74,0.74
+Referencia,Saint Bernard,100,79,0.79
+Referencia,Samoyed,100,94,0.94
+Referencia,Scottish Terrier,99,94,0.9494949494949495
+Referencia,Shiba Inu,100,90,0.9
+Referencia,Siamese,100,83,0.83
+Referencia,Sphynx,100,90,0.9
+Referencia,Staffordshire Bull Terrier,89,39,0.43820224719101125
+Referencia,Wheaten Terrier,100,77,0.77
+Referencia,Yorkshire Terrier,100,86,0.86
+FOUL,Abyssinian,98,78,0.7959183673469388
+FOUL,American Bulldog,100,70,0.7
+FOUL,American Pit Bull Terrier,100,45,0.45
+FOUL,Basset Hound,100,77,0.77
+FOUL,Beagle,100,80,0.8
+FOUL,Bengal,100,77,0.77
+FOUL,Birman,100,62,0.62
+FOUL,Bombay,88,73,0.8295454545454546
+FOUL,Boxer,99,84,0.8484848484848485
+FOUL,British Shorthair,100,70,0.7
+FOUL,Chihuahua,100,0,0.0
+FOUL,Egyptian Mau,97,73,0.7525773195876289
+FOUL,English Cocker Spaniel,100,81,0.81
+FOUL,English Setter,100,77,0.77
+FOUL,German Shorthaired,100,83,0.83
+FOUL,Great Pyrenees,100,90,0.9
+FOUL,Havanese,100,84,0.84
+FOUL,Japanese Chin,100,84,0.84
+FOUL,Keeshond,99,90,0.9090909090909091
+FOUL,Leonberger,100,91,0.91
+FOUL,Maine Coon,100,74,0.74
+FOUL,Miniature Pinscher,100,71,0.71
+FOUL,Newfoundland,100,89,0.89
+FOUL,Persian,100,79,0.79
+FOUL,Pomeranian,100,83,0.83
+FOUL,Pug,100,84,0.84
+FOUL,Ragdoll,100,71,0.71
+FOUL,Russian Blue,100,73,0.73
+FOUL,Saint Bernard,100,83,0.83
+FOUL,Samoyed,100,91,0.91
+FOUL,Scottish Terrier,99,92,0.9292929292929293
+FOUL,Shiba Inu,100,92,0.92
+FOUL,Siamese,100,75,0.75
+FOUL,Sphynx,100,84,0.84
+FOUL,Staffordshire Bull Terrier,89,45,0.5056179775280899
+FOUL,Wheaten Terrier,100,80,0.8
+FOUL,Yorkshire Terrier,100,82,0.82
+Retencao,Abyssinian,98,67,0.6836734693877551
+Retencao,American Bulldog,100,75,0.75
+Retencao,American Pit Bull Terrier,100,37,0.37
+Retencao,Basset Hound,100,75,0.75
+Retencao,Beagle,100,78,0.78
+Retencao,Bengal,100,87,0.87
+Retencao,Birman,100,61,0.61
+Retencao,Bombay,88,70,0.7954545454545454
+Retencao,Boxer,99,83,0.8383838383838383
+Retencao,British Shorthair,100,63,0.63
+Retencao,Chihuahua,100,0,0.0
+Retencao,Egyptian Mau,97,75,0.7731958762886598
+Retencao,English Cocker Spaniel,100,78,0.78
+Retencao,English Setter,100,86,0.86
+Retencao,German Shorthaired,100,85,0.85
+Retencao,Great Pyrenees,100,92,0.92
+Retencao,Havanese,100,85,0.85
+Retencao,Japanese Chin,100,84,0.84
+Retencao,Keeshond,99,91,0.9191919191919192
+Retencao,Leonberger,100,91,0.91
+Retencao,Maine Coon,100,72,0.72
+Retencao,Miniature Pinscher,100,77,0.77
+Retencao,Newfoundland,100,90,0.9
+Retencao,Persian,100,74,0.74
+Retencao,Pomeranian,100,83,0.83
+Retencao,Pug,100,87,0.87
+Retencao,Ragdoll,100,72,0.72
+Retencao,Russian Blue,100,79,0.79
+Retencao,Saint Bernard,100,80,0.8
+Retencao,Samoyed,100,91,0.91
+Retencao,Scottish Terrier,99,93,0.9393939393939394
+Retencao,Shiba Inu,100,88,0.88
+Retencao,Siamese,100,84,0.84
+Retencao,Sphynx,100,86,0.86
+Retencao,Staffordshire Bull Terrier,89,40,0.449438202247191
+Retencao,Wheaten Terrier,100,76,0.76
+Retencao,Yorkshire Terrier,100,86,0.86
+Poda apenas,Abyssinian,98,76,0.7755102040816326
+Poda apenas,American Bulldog,100,66,0.66
+Poda apenas,American Pit Bull Terrier,100,46,0.46
+Poda apenas,Basset Hound,100,73,0.73
+Poda apenas,Beagle,100,79,0.79
+Poda apenas,Bengal,100,64,0.64
+Poda apenas,Birman,100,52,0.52
+Poda apenas,Bombay,88,78,0.8863636363636364
+Poda apenas,Boxer,99,90,0.9090909090909091
+Poda apenas,British Shorthair,100,72,0.72
+Poda apenas,Chihuahua,100,75,0.75
+Poda apenas,Egyptian Mau,97,79,0.8144329896907216
+Poda apenas,English Cocker Spaniel,100,75,0.75
+Poda apenas,English Setter,100,83,0.83
+Poda apenas,German Shorthaired,100,83,0.83
+Poda apenas,Great Pyrenees,100,90,0.9
+Poda apenas,Havanese,100,85,0.85
+Poda apenas,Japanese Chin,100,76,0.76
+Poda apenas,Keeshond,99,89,0.898989898989899
+Poda apenas,Leonberger,100,93,0.93
+Poda apenas,Maine Coon,100,77,0.77
+Poda apenas,Miniature Pinscher,100,73,0.73
+Poda apenas,Newfoundland,100,86,0.86
+Poda apenas,Persian,100,73,0.73
+Poda apenas,Pomeranian,100,86,0.86
+Poda apenas,Pug,100,85,0.85
+Poda apenas,Ragdoll,100,74,0.74
+Poda apenas,Russian Blue,100,68,0.68
+Poda apenas,Saint Bernard,100,80,0.8
+Poda apenas,Samoyed,100,92,0.92
+Poda apenas,Scottish Terrier,99,93,0.9393939393939394
+Poda apenas,Shiba Inu,100,88,0.88
+Poda apenas,Siamese,100,82,0.82
+Poda apenas,Sphynx,100,83,0.83
+Poda apenas,Staffordshire Bull Terrier,89,36,0.4044943820224719
+Poda apenas,Wheaten Terrier,100,78,0.78
+Poda apenas,Yorkshire Terrier,100,90,0.9
+Poda + retencao,Abyssinian,98,73,0.7448979591836735
+Poda + retencao,American Bulldog,100,68,0.68
+Poda + retencao,American Pit Bull Terrier,100,40,0.4
+Poda + retencao,Basset Hound,100,74,0.74
+Poda + retencao,Beagle,100,83,0.83
+Poda + retencao,Bengal,100,83,0.83
+Poda + retencao,Birman,100,65,0.65
+Poda + retencao,Bombay,88,77,0.875
+Poda + retencao,Boxer,99,86,0.8686868686868687
+Poda + retencao,British Shorthair,100,67,0.67
+Poda + retencao,Chihuahua,100,0,0.0
+Poda + retencao,Egyptian Mau,97,75,0.7731958762886598
+Poda + retencao,English Cocker Spaniel,100,77,0.77
+Poda + retencao,English Setter,100,83,0.83
+Poda + retencao,German Shorthaired,100,87,0.87
+Poda + retencao,Great Pyrenees,100,93,0.93
+Poda + retencao,Havanese,100,84,0.84
+Poda + retencao,Japanese Chin,100,84,0.84
+Poda + retencao,Keeshond,99,90,0.9090909090909091
+Poda + retencao,Leonberger,100,92,0.92
+Poda + retencao,Maine Coon,100,72,0.72
+Poda + retencao,Miniature Pinscher,100,78,0.78
+Poda + retencao,Newfoundland,100,89,0.89
+Poda + retencao,Persian,100,74,0.74
+Poda + retencao,Pomeranian,100,83,0.83
+Poda + retencao,Pug,100,87,0.87
+Poda + retencao,Ragdoll,100,67,0.67
+Poda + retencao,Russian Blue,100,78,0.78
+Poda + retencao,Saint Bernard,100,80,0.8
+Poda + retencao,Samoyed,100,91,0.91
+Poda + retencao,Scottish Terrier,99,93,0.9393939393939394
+Poda + retencao,Shiba Inu,100,89,0.89
+Poda + retencao,Siamese,100,85,0.85
+Poda + retencao,Sphynx,100,84,0.84
+Poda + retencao,Staffordshire Bull Terrier,89,42,0.47191011235955055
+Poda + retencao,Wheaten Terrier,100,79,0.79
+Poda + retencao,Yorkshire Terrier,100,86,0.86
+Poda + FOUL,Abyssinian,98,81,0.826530612244898
+Poda + FOUL,American Bulldog,100,54,0.54
+Poda + FOUL,American Pit Bull Terrier,100,52,0.52
+Poda + FOUL,Basset Hound,100,82,0.82
+Poda + FOUL,Beagle,100,78,0.78
+Poda + FOUL,Bengal,100,78,0.78
+Poda + FOUL,Birman,100,61,0.61
+Poda + FOUL,Bombay,88,67,0.7613636363636364
+Poda + FOUL,Boxer,99,80,0.8080808080808081
+Poda + FOUL,British Shorthair,100,68,0.68
+Poda + FOUL,Chihuahua,100,12,0.12
+Poda + FOUL,Egyptian Mau,97,75,0.7731958762886598
+Poda + FOUL,English Cocker Spaniel,100,78,0.78
+Poda + FOUL,English Setter,100,76,0.76
+Poda + FOUL,German Shorthaired,100,83,0.83
+Poda + FOUL,Great Pyrenees,100,91,0.91
+Poda + FOUL,Havanese,100,83,0.83
+Poda + FOUL,Japanese Chin,100,83,0.83
+Poda + FOUL,Keeshond,99,88,0.8888888888888888
+Poda + FOUL,Leonberger,100,91,0.91
+Poda + FOUL,Maine Coon,100,82,0.82
+Poda + FOUL,Miniature Pinscher,100,74,0.74
+Poda + FOUL,Newfoundland,100,86,0.86
+Poda + FOUL,Persian,100,82,0.82
+Poda + FOUL,Pomeranian,100,87,0.87
+Poda + FOUL,Pug,100,85,0.85
+Poda + FOUL,Ragdoll,100,49,0.49
+Poda + FOUL,Russian Blue,100,67,0.67
+Poda + FOUL,Saint Bernard,100,80,0.8
+Poda + FOUL,Samoyed,100,92,0.92
+Poda + FOUL,Scottish Terrier,99,90,0.9090909090909091
+Poda + FOUL,Shiba Inu,100,89,0.89
+Poda + FOUL,Siamese,100,65,0.65
+Poda + FOUL,Sphynx,100,70,0.7
+Poda + FOUL,Staffordshire Bull Terrier,89,37,0.4157303370786517
+Poda + FOUL,Wheaten Terrier,100,83,0.83
+Poda + FOUL,Yorkshire Terrier,100,89,0.89

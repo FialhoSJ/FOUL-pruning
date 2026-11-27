@@ -179,6 +179,9 @@ results/
 results-2/*
 !results-2/comparisons/
 results-2/comparisons/*
+!results-2/comparisons/*.png
+!results-2/comparisons/*.pdf
+!results-2/comparisons/*.csv
 !results-2/comparisons/pruning_sweep_s1/
 results-2/comparisons/pruning_sweep_s1/*
 !results-2/comparisons/pruning_sweep_s1/*.png

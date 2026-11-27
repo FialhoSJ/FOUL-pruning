@@ -1,0 +1,260 @@
+method,predicted_breed,chihuahua_images
+Original,Abyssinian,0
+Original,American Bulldog,1
+Original,American Pit Bull Terrier,2
+Original,Basset Hound,0
+Original,Beagle,1
+Original,Bengal,0
+Original,Birman,0
+Original,Bombay,2
+Original,Boxer,0
+Original,British Shorthair,0
+Original,Chihuahua,69
+Original,Egyptian Mau,0
+Original,English Cocker Spaniel,0
+Original,English Setter,1
+Original,German Shorthaired,2
+Original,Great Pyrenees,1
+Original,Havanese,0
+Original,Japanese Chin,0
+Original,Keeshond,0
+Original,Leonberger,0
+Original,Maine Coon,0
+Original,Miniature Pinscher,4
+Original,Newfoundland,0
+Original,Persian,0
+Original,Pomeranian,1
+Original,Pug,0
+Original,Ragdoll,1
+Original,Russian Blue,0
+Original,Saint Bernard,0
+Original,Samoyed,0
+Original,Scottish Terrier,0
+Original,Shiba Inu,6
+Original,Siamese,0
+Original,Sphynx,9
+Original,Staffordshire Bull Terrier,0
+Original,Wheaten Terrier,0
+Original,Yorkshire Terrier,0
+Referencia,Abyssinian,1
+Referencia,American Bulldog,2
+Referencia,American Pit Bull Terrier,7
+Referencia,Basset Hound,1
+Referencia,Beagle,5
+Referencia,Bengal,1
+Referencia,Birman,0
+Referencia,Bombay,3
+Referencia,Boxer,0
+Referencia,British Shorthair,0
+Referencia,Chihuahua,0
+Referencia,Egyptian Mau,0
+Referencia,English Cocker Spaniel,0
+Referencia,English Setter,1
+Referencia,German Shorthaired,1
+Referencia,Great Pyrenees,1
+Referencia,Havanese,0
+Referencia,Japanese Chin,0
+Referencia,Keeshond,0
+Referencia,Leonberger,0
+Referencia,Maine Coon,0
+Referencia,Miniature Pinscher,14
+Referencia,Newfoundland,0
+Referencia,Persian,0
+Referencia,Pomeranian,2
+Referencia,Pug,0
+Referencia,Ragdoll,1
+Referencia,Russian Blue,0
+Referencia,Saint Bernard,0
+Referencia,Samoyed,0
+Referencia,Scottish Terrier,0
+Referencia,Shiba Inu,15
+Referencia,Siamese,3
+Referencia,Sphynx,42
+Referencia,Staffordshire Bull Terrier,0
+Referencia,Wheaten Terrier,0
+Referencia,Yorkshire Terrier,0
+FOUL,Abyssinian,3
+FOUL,American Bulldog,2
+FOUL,American Pit Bull Terrier,5
+FOUL,Basset Hound,0
+FOUL,Beagle,4
+FOUL,Bengal,0
+FOUL,Birman,1
+FOUL,Bombay,3
+FOUL,Boxer,0
+FOUL,British Shorthair,0
+FOUL,Chihuahua,0
+FOUL,Egyptian Mau,0
+FOUL,English Cocker Spaniel,0
+FOUL,English Setter,1
+FOUL,German Shorthaired,1
+FOUL,Great Pyrenees,1
+FOUL,Havanese,0
+FOUL,Japanese Chin,0
+FOUL,Keeshond,0
+FOUL,Leonberger,0
+FOUL,Maine Coon,0
+FOUL,Miniature Pinscher,10
+FOUL,Newfoundland,0
+FOUL,Persian,0
+FOUL,Pomeranian,2
+FOUL,Pug,0
+FOUL,Ragdoll,0
+FOUL,Russian Blue,0
+FOUL,Saint Bernard,0
+FOUL,Samoyed,0
+FOUL,Scottish Terrier,0
+FOUL,Shiba Inu,28
+FOUL,Siamese,1
+FOUL,Sphynx,38
+FOUL,Staffordshire Bull Terrier,0
+FOUL,Wheaten Terrier,0
+FOUL,Yorkshire Terrier,0
+Retencao,Abyssinian,1
+Retencao,American Bulldog,3
+Retencao,American Pit Bull Terrier,7
+Retencao,Basset Hound,0
+Retencao,Beagle,5
+Retencao,Bengal,0
+Retencao,Birman,0
+Retencao,Bombay,3
+Retencao,Boxer,0
+Retencao,British Shorthair,0
+Retencao,Chihuahua,0
+Retencao,Egyptian Mau,0
+Retencao,English Cocker Spaniel,0
+Retencao,English Setter,1
+Retencao,German Shorthaired,2
+Retencao,Great Pyrenees,1
+Retencao,Havanese,0
+Retencao,Japanese Chin,0
+Retencao,Keeshond,0
+Retencao,Leonberger,0
+Retencao,Maine Coon,0
+Retencao,Miniature Pinscher,15
+Retencao,Newfoundland,0
+Retencao,Persian,0
+Retencao,Pomeranian,1
+Retencao,Pug,0
+Retencao,Ragdoll,0
+Retencao,Russian Blue,0
+Retencao,Saint Bernard,0
+Retencao,Samoyed,0
+Retencao,Scottish Terrier,0
+Retencao,Shiba Inu,19
+Retencao,Siamese,4
+Retencao,Sphynx,38
+Retencao,Staffordshire Bull Terrier,0
+Retencao,Wheaten Terrier,0
+Retencao,Yorkshire Terrier,0
+Poda apenas,Abyssinian,1
+Poda apenas,American Bulldog,1
+Poda apenas,American Pit Bull Terrier,2
+Poda apenas,Basset Hound,0
+Poda apenas,Beagle,0
+Poda apenas,Bengal,0
+Poda apenas,Birman,0
+Poda apenas,Bombay,2
+Poda apenas,Boxer,0
+Poda apenas,British Shorthair,0
+Poda apenas,Chihuahua,75
+Poda apenas,Egyptian Mau,0
+Poda apenas,English Cocker Spaniel,0
+Poda apenas,English Setter,1
+Poda apenas,German Shorthaired,0
+Poda apenas,Great Pyrenees,1
+Poda apenas,Havanese,0
+Poda apenas,Japanese Chin,0
+Poda apenas,Keeshond,0
+Poda apenas,Leonberger,0
+Poda apenas,Maine Coon,0
+Poda apenas,Miniature Pinscher,4
+Poda apenas,Newfoundland,0
+Poda apenas,Persian,0
+Poda apenas,Pomeranian,1
+Poda apenas,Pug,0
+Poda apenas,Ragdoll,0
+Poda apenas,Russian Blue,0
+Poda apenas,Saint Bernard,0
+Poda apenas,Samoyed,0
+Poda apenas,Scottish Terrier,0
+Poda apenas,Shiba Inu,4
+Poda apenas,Siamese,0
+Poda apenas,Sphynx,8
+Poda apenas,Staffordshire Bull Terrier,0
+Poda apenas,Wheaten Terrier,0
+Poda apenas,Yorkshire Terrier,0
+Poda + retencao,Abyssinian,1
+Poda + retencao,American Bulldog,3
+Poda + retencao,American Pit Bull Terrier,7
+Poda + retencao,Basset Hound,0
+Poda + retencao,Beagle,4
+Poda + retencao,Bengal,0
+Poda + retencao,Birman,0
+Poda + retencao,Bombay,3
+Poda + retencao,Boxer,0
+Poda + retencao,British Shorthair,0
+Poda + retencao,Chihuahua,0
+Poda + retencao,Egyptian Mau,0
+Poda + retencao,English Cocker Spaniel,0
+Poda + retencao,English Setter,1
+Poda + retencao,German Shorthaired,1
+Poda + retencao,Great Pyrenees,1
+Poda + retencao,Havanese,0
+Poda + retencao,Japanese Chin,1
+Poda + retencao,Keeshond,0
+Poda + retencao,Leonberger,0
+Poda + retencao,Maine Coon,0
+Poda + retencao,Miniature Pinscher,17
+Poda + retencao,Newfoundland,0
+Poda + retencao,Persian,0
+Poda + retencao,Pomeranian,1
+Poda + retencao,Pug,0
+Poda + retencao,Ragdoll,0
+Poda + retencao,Russian Blue,0
+Poda + retencao,Saint Bernard,0
+Poda + retencao,Samoyed,0
+Poda + retencao,Scottish Terrier,0
+Poda + retencao,Shiba Inu,18
+Poda + retencao,Siamese,3
+Poda + retencao,Sphynx,39
+Poda + retencao,Staffordshire Bull Terrier,0
+Poda + retencao,Wheaten Terrier,0
+Poda + retencao,Yorkshire Terrier,0
+Poda + FOUL,Abyssinian,4
+Poda + FOUL,American Bulldog,1
+Poda + FOUL,American Pit Bull Terrier,6
+Poda + FOUL,Basset Hound,0
+Poda + FOUL,Beagle,4
+Poda + FOUL,Bengal,1
+Poda + FOUL,Birman,0
+Poda + FOUL,Bombay,3
+Poda + FOUL,Boxer,0
+Poda + FOUL,British Shorthair,0
+Poda + FOUL,Chihuahua,12
+Poda + FOUL,Egyptian Mau,0
+Poda + FOUL,English Cocker Spaniel,0
+Poda + FOUL,English Setter,2
+Poda + FOUL,German Shorthaired,0
+Poda + FOUL,Great Pyrenees,1
+Poda + FOUL,Havanese,0
+Poda + FOUL,Japanese Chin,0
+Poda + FOUL,Keeshond,0
+Poda + FOUL,Leonberger,0
+Poda + FOUL,Maine Coon,2
+Poda + FOUL,Miniature Pinscher,15
+Poda + FOUL,Newfoundland,0
+Poda + FOUL,Persian,0
+Poda + FOUL,Pomeranian,2
+Poda + FOUL,Pug,0
+Poda + FOUL,Ragdoll,0
+Poda + FOUL,Russian Blue,1
+Poda + FOUL,Saint Bernard,0
+Poda + FOUL,Samoyed,0
+Poda + FOUL,Scottish Terrier,1
+Poda + FOUL,Shiba Inu,12
+Poda + FOUL,Siamese,2
+Poda + FOUL,Sphynx,29
+Poda + FOUL,Staffordshire Bull Terrier,0
+Poda + FOUL,Wheaten Terrier,0
+Poda + FOUL,Yorkshire Terrier,2
