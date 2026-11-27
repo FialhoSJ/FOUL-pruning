@@ -7,7 +7,7 @@ from torchvision.models import ResNet18_Weights, resnet18
 
 
 class HierarchicalResNet18(nn.Module):
-    """A frozen visual encoder and a compact, prunable task-specific projection.
+    """Configurable visual encoder and compact, prunable task-specific projection.
 
     ``forward`` also accepts cached 512-dimensional encoder features. This lets
     CPU-only federated experiments train and unlearn without repeatedly running
@@ -23,6 +23,7 @@ class HierarchicalResNet18(nn.Module):
         self.num_breeds = int(num_breeds)
         self.image_size = int(image_size)
         self.hidden_dim = int(hidden_dim)
+        self.initialization = "imagenet" if pretrained else "random"
         self.backbone = resnet18(
             weights=ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         )
@@ -30,6 +31,7 @@ class HierarchicalResNet18(nn.Module):
         self.backbone.requires_grad_(False)
         self.backbone.eval()
         self.encoder_frozen = True
+        self.encoder_policy = "frozen"
         self.fc1 = nn.Linear(512, self.hidden_dim)
         self.family_head = nn.Linear(self.hidden_dim, self.num_families)
         self.breed_head = nn.Linear(self.hidden_dim, self.num_breeds)
@@ -48,17 +50,27 @@ class HierarchicalResNet18(nn.Module):
             return self.backbone((images - self.image_mean) / self.image_std)
 
     def unfreeze_last_block(self):
+        self.backbone.requires_grad_(False)
         self.backbone.layer4.requires_grad_(True)
         self.encoder_frozen = False
+        self.encoder_policy = "last-block"
+
+    def unfreeze_encoder(self):
+        self.backbone.requires_grad_(True)
+        self.encoder_frozen = False
+        self.encoder_policy = "full"
 
     def freeze_encoder(self):
         self.backbone.requires_grad_(False)
         self.encoder_frozen = True
+        self.encoder_policy = "frozen"
 
     def forward_features(self, images_or_features):
         if images_or_features.ndim == 4:
             features = self.encode(images_or_features)
         elif images_or_features.ndim == 2 and images_or_features.shape[1] == 512:
+            if not self.encoder_frozen:
+                raise ValueError("An updating encoder requires raw images, not cached features")
             features = images_or_features
         else:
             raise ValueError("Expected RGB images or 512-dimensional ResNet18 features")

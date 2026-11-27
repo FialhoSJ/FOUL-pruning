@@ -22,6 +22,7 @@ import torch
 import argparse
 import os
 import time
+import random
 import warnings
 import numpy as np
 import torchvision
@@ -45,6 +46,7 @@ from flcore.trainmodel.mobilenet_v2 import *
 from flcore.trainmodel.transformer import *
 from flcore.trainmodel.hierarchical_cnn import HierarchicalCNN
 from flcore.trainmodel.hierarchical_resnet import HierarchicalResNet18
+from utils.pet_protocol import apply_encoder_policy
 
 from utils.result_utils import average_data
 from utils.mem_utils import MemReporter
@@ -53,15 +55,16 @@ logger = logging.getLogger()
 logger.setLevel(logging.ERROR)
 
 warnings.simplefilter("ignore")
-torch.manual_seed(0)
-
-
 def run(args):
     time_list = []
     reporter = MemReporter()
     model_str = args.model
 
     for i in range(args.prev, args.times):
+        args.run_seed = args.seed + i
+        random.seed(args.run_seed)
+        np.random.seed(args.run_seed)
+        torch.manual_seed(args.run_seed)
         print(f"\n============= Running time: {i}th =============")
         print("Creating server and clients ...")
         start = time.time()
@@ -70,14 +73,30 @@ def run(args):
         is_hierarchical = args.dataset in ("OxfordPet", "StanfordDogs")
         hierarchy_config = None
         if is_hierarchical:
+            if args.algorithm != "FOUL":
+                raise ValueError("Pet protocol currently requires -algo FOUL, including its reference mode")
+            if args.pet_checkpoint and args.learn_mode != "unlearn":
+                raise ValueError("--pet-checkpoint is only used with -lm unlearn")
+            if not 0 <= args.pet_validation_fraction < 1:
+                raise ValueError("--pet-validation-fraction must be in [0, 1)")
+            if args.pet_backbone == "cnn" and args.pet_encoder_unlearning not in ("preserve", "full"):
+                raise ValueError("CNN unlearning updates the full network")
+            if args.pet_unfreeze_round >= 0 and args.pet_encoder_training != "frozen":
+                raise ValueError("Use either --pet-unfreeze-round or --pet-encoder-training")
             if min(args.pet_learning_rate, args.pet_backbone_lr, args.breed_loss_weight) <= 0:
                 raise ValueError("Pet learning rates and breed loss weight must be positive")
             if args.pet_pool_grid < 1:
                 raise ValueError("--pet-pool-grid must be positive")
             if not 0 <= args.min_target_accuracy <= 1:
                 raise ValueError("--min-target-accuracy must be between 0 and 1")
-            if not 0 < args.pruning_rate < 1:
-                raise ValueError("--pruning-rate must be between 0 and 1")
+            if not 0 <= args.pruning_rate < 1:
+                raise ValueError("--pruning-rate must be between 0 (no pruning) and 1")
+            if args.pet_pruning_only and args.pruning_rate == 0:
+                raise ValueError("--pet-pruning-only requires --pruning-rate greater than 0")
+            if args.pet_retrain_reference and args.learn_mode != "learn":
+                raise ValueError("--pet-retrain-reference requires -lm learn")
+            if args.pet_pruning_only and args.learn_mode == "learn":
+                raise ValueError("--pet-pruning-only requires -lm unlearn or joint")
             if args.pet_unfreeze_round < -1 or args.pet_unfreeze_round >= args.learn_mode_rounds:
                 raise ValueError("--pet-unfreeze-round must be -1 or a learning round")
             if args.pet_backbone == "cnn" and args.pet_unfreeze_round >= 0:
@@ -113,7 +132,12 @@ def run(args):
                     num_families=args.num_classes,
                     num_breeds=args.num_breeds,
                     image_size=configured_image_size,
+                    pretrained=args.pet_initialization == "imagenet" and args.learn_mode != "unlearn",
                 ).to(args.device)
+                if args.learn_mode != "unlearn":
+                    if args.pet_initialization == "random" and args.pet_encoder_training != "full":
+                        raise ValueError("Randomly initialized ResNet requires --pet-encoder-training full")
+                    apply_encoder_policy(args.model, args.pet_encoder_training)
             else:
                 args.model = HierarchicalCNN(
                     num_families=args.num_classes,
@@ -320,7 +344,8 @@ def run(args):
     print(f"\nAverage time cost: {round(np.average(time_list), 2)}s.")
 
     # Global average
-    average_data(dataset=args.dataset, algorithm=args.algorithm, goal=args.goal, times=args.times)
+    average_data(dataset=args.dataset, algorithm=args.algorithm, goal=args.goal, times=args.times,
+                 results_dir=args.results_dir)
 
     print("All done!")
 
@@ -362,6 +387,8 @@ if __name__ == "__main__":
     parser.add_argument('-eg', "--eval_gap", type=int, default=1,
                         help="Rounds gap for evaluation")
     parser.add_argument('-sfn', "--save_folder_name", type=str, default='items')
+    parser.add_argument('--results-dir', type=str, default='../results',
+                        help='Directory for experiment JSON, H5 and pet checkpoints')
     parser.add_argument('-ab', "--auto_break", type=bool, default=False)
     parser.add_argument('-dlg', "--dlg_eval", type=bool, default=False)
     parser.add_argument('-dlgg', "--dlg_gap", type=int, default=100)
@@ -486,13 +513,38 @@ if __name__ == "__main__":
     parser.add_argument('-fb', '--forget-breed', dest='forget_breed', type=str, default=None,
                         help='Annotated pet breed name or breed ID to forget')
     parser.add_argument('--pruning-rate', type=float, default=0.5,
-                        help='Fraction of target-discriminative channels removed before FOUL')
+                        help='Fraction of target-discriminative channels removed before FOUL; 0 disables pruning')
+    parser.add_argument('--pet-pruning-only', action='store_true',
+                        help='Evaluate and save the pruned pet model without unlearning updates')
+    parser.add_argument('--pet-retrain-reference', action='store_true',
+                        help='Train a reference with the target excluded from breed loss but retained in family loss')
+    parser.add_argument('--pet-checkpoint', type=str, default=None,
+                        help='Explicit trained checkpoint for -lm unlearn; validate architecture and labels')
+    parser.add_argument('--pet-pruning-strategy', choices=('magnitude', 'discriminative', 'random'), default='magnitude',
+                        help='Magnitude compresses without using target labels; discriminative is the legacy targeted ablation')
+    parser.add_argument('--pet-forget-scope', choices=('examples', 'attribute'), default='examples',
+                        help='Examples removes target images from all retained tasks; attribute preserves their family supervision')
+    parser.add_argument('--pet-skip-final-test', action='store_true',
+                        help='Do not evaluate the official test during validation-only tuning runs')
+    parser.add_argument('--pet-unlearning-method', choices=('foul', 'retain'), default='foul',
+                        help='FOUL aggregation or sample-weighted retain-only adaptation')
+    parser.add_argument('--pet-encoder-training', choices=('frozen', 'last-block', 'full'), default='frozen')
+    parser.add_argument('--pet-encoder-unlearning', choices=('preserve', 'frozen', 'last-block', 'full'), default='preserve',
+                        help='Preserve the checkpoint policy by default; full updates the entire encoder')
+    parser.add_argument('--pet-initialization', choices=('imagenet', 'random'), default='imagenet',
+                        help='ResNet initialization; the CNN always starts randomly')
+    parser.add_argument('--pet-validation-fraction', type=float, default=0.0,
+                        help='Stratified fraction of each client training set reserved for validation; 0 is legacy test monitoring')
+    parser.add_argument('--pet-split-seed', type=int, default=1,
+                        help='Fixed train/validation split seed, independent of optimization seed')
+    parser.add_argument('--pet-augment', action='store_true',
+                        help='Flip and brightness augmentation of raw training images')
     parser.add_argument('--pet-learning-rate', type=float, default=0.001,
                         help='AdamW learning rate for OxfordPet and StanfordDogs')
     parser.add_argument('--pet-backbone', choices=('resnet18', 'cnn'), default='resnet18',
                         help='Pet image encoder; resnet18 uses ImageNet pretrained weights')
     parser.add_argument('--pet-backbone-lr', type=float, default=1e-5,
-                        help='Learning rate when fine-tuning ResNet18 layer4')
+                        help='Learning rate for trainable ResNet18 encoder parameters')
     parser.add_argument('--pet-unfreeze-round', type=int, default=-1,
                         help='Learning round to fine-tune ResNet18 layer4; -1 keeps it frozen')
     parser.add_argument('--breed-loss-weight', type=float, default=2.0,
@@ -510,7 +562,7 @@ if __name__ == "__main__":
     parser.add_argument('--clip-max-samples', type=int, default=1000,
                         help='Maximum family-matched images encoded by optional CLIP comparison')
     parser.add_argument('--seed', type=int, default=1,
-                        help='Random seed used for optional CLIP comparison sampling')
+                        help='Random seed for training, client selection and CLIP sampling')
 
     
     parser.add_argument('-wb', "--use_wandb", action='store_true',

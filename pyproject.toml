@@ -1,0 +1,40 @@
+[project]
+name = "foul-federated-unlearning"
+version = "0.1.0"
+description = "FOUL federated learning and hierarchical pet unlearning experiments"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "calmsize==0.1.3",
+    "click",
+    "cvxpy==1.3.2",
+    "fastparquet==2023.8.0",
+    "h5py==3.9.0",
+    "matplotlib==3.8.0",
+    "memory-profiler==0.61.0",
+    "numpy<1.25",
+    "opacus==1.4.0",
+    "pandas==2.1.1",
+    "portalocker==2.8.2",
+    "pyarrow==13.0.0",
+    "scikit-learn==1.3.1",
+    "scipy",
+    "seaborn==0.13.0",
+    "setuptools<81",
+    "tensorboard==2.14.1",
+    "torch==2.0.1",
+    "torchvision==0.15.2",
+    "ujson==5.8.0",
+    "wandb==0.15.12",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

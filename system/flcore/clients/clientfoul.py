@@ -22,6 +22,7 @@ import time
 from torch.utils.data import DataLoader, TensorDataset
 from flcore.clients.clientbase import Client
 from utils.hierarchical_data import read_hierarchical_client_data
+from utils.pet_protocol import load_pet_split
 
 class clientFOUL(Client):
     def __init__(self, args, id, train_samples, test_samples, **kwargs):
@@ -52,15 +53,18 @@ class clientFOUL(Client):
             )
         return torch.optim.SGD(model.parameters(), lr=self.learning_rate)
 
-    def _load_hierarchical_data(self, is_train=True):
+    def _load_hierarchical_data(self, is_train=True, split=None):
+        split = split or ("train" if is_train else "test")
         cacheable = hasattr(self.model, "encode") and self.model.encoder_frozen
         if cacheable:
             feature_cache = getattr(self, "_pet_feature_cache", {})
-            if is_train in feature_cache:
-                return feature_cache[is_train]
+            if split in feature_cache:
+                return feature_cache[split]
         dataset_root = getattr(self.args, "dataset_root", "../dataset")
-        data = read_hierarchical_client_data(
-            self.dataset, self.id, is_train=is_train, dataset_root=dataset_root
+        data = load_pet_split(
+            self.dataset, self.id, dataset_root, split,
+            getattr(self.args, "pet_validation_fraction", 0.0),
+            getattr(self.args, "pet_split_seed", 1),
         )
         images = data["x"]
         if cacheable:
@@ -73,7 +77,7 @@ class clientFOUL(Client):
             images = torch.cat(features) if features else torch.empty((0, 512))
         result = TensorDataset(images, data["y"], data["y_subclass"])
         if cacheable:
-            feature_cache[is_train] = result
+            feature_cache[split] = result
             self._pet_feature_cache = feature_cache
         return result
 
@@ -84,7 +88,13 @@ class clientFOUL(Client):
 
     def _hierarchical_step(self, model, optimizer, batch, target_breed_id=None, group="all"):
         images, families, breeds = (value.to(self.device) for value in batch)
-        if hasattr(model, "encode") and not model.encoder_frozen and images.ndim == 4:
+        full_example = getattr(self.args, 'pet_forget_scope', 'attribute') == 'examples'
+        if full_example and group == 'retain':
+            mask = breeds != int(target_breed_id)
+            if not torch.any(mask):
+                return 0
+            images, families, breeds = images[mask], families[mask], breeds[mask]
+        if images.ndim == 4 and getattr(self.args, "pet_augment", False):
             flip = torch.rand(len(images), device=images.device) < 0.5
             images = torch.where(flip[:, None, None, None], images.flip(-1), images)
             brightness = torch.empty(len(images), 1, 1, 1, device=images.device).uniform_(0.9, 1.1)
@@ -94,9 +104,11 @@ class clientFOUL(Client):
             mask = breeds == int(target_breed_id)
             if not torch.any(mask):
                 return 0
-            images, breeds = images[mask], breeds[mask]
-            _, breed_logits = model(images)
+            images, families, breeds = images[mask], families[mask], breeds[mask]
+            family_logits, breed_logits = model(images)
             loss = breed_weight * self.loss(breed_logits, breeds)
+            if full_example:
+                loss = loss + self.loss(family_logits, families)
         else:
             family_logits, breed_logits = model(images)
             loss = self.loss(family_logits, families)
@@ -118,8 +130,15 @@ class clientFOUL(Client):
         self.learning_rate_scheduler = torch.optim.lr_scheduler.ExponentialLR(
             self.optimizer, gamma=self.args.learning_rate_decay_gamma
         )
+        data = self._load_hierarchical_data(is_train=True)
+        if getattr(self, 'retrain_reference_target', None) is not None and getattr(
+                self.args, 'pet_forget_scope', 'attribute') == 'examples':
+            keep = data.tensors[2] != int(self.retrain_reference_target)
+            data = TensorDataset(*(tensor[keep] for tensor in data.tensors))
+        if len(data) == 0:
+            return
         loader = DataLoader(
-            self._load_hierarchical_data(is_train=True),
+            data,
             batch_size=self.batch_size,
             drop_last=False,
             shuffle=True,
@@ -130,7 +149,13 @@ class clientFOUL(Client):
             for batch in loader:
                 if self.train_slow:
                     time.sleep(0.1 * np.abs(np.random.rand()))
-                self._hierarchical_step(self.model, self.optimizer, batch)
+                if getattr(self, "retrain_reference_target", None) is not None:
+                    self._hierarchical_step(
+                        self.model, self.optimizer, batch,
+                        target_breed_id=self.retrain_reference_target, group="retain"
+                    )
+                else:
+                    self._hierarchical_step(self.model, self.optimizer, batch)
         if self.learning_rate_decay:
             self.learning_rate_scheduler.step()
         self.train_time_cost["num_rounds"] += 1
@@ -156,13 +181,15 @@ class clientFOUL(Client):
                 )
         return model, sample_count
 
-    def unlearning_group_updates(self, global_model, target_breed_id):
+    def unlearning_group_updates(self, global_model, target_breed_id, include_forget=True):
         """Train independent retain/forget copies from the same global model."""
         data = self._load_hierarchical_data(is_train=True)
         breeds = data.tensors[2]
         target_count = int(torch.sum(breeds == int(target_breed_id)).item())
-        retain_count = len(breeds)
-        if target_count == 0:
+        retain_count = (int(torch.sum(breeds != int(target_breed_id)).item())
+                        if getattr(self.args, 'pet_forget_scope', 'attribute') == 'examples'
+                        else len(breeds))
+        if target_count == 0 or not include_forget:
             forget_model = None
         else:
             forget_model, _ = self._fit_unlearning_group(

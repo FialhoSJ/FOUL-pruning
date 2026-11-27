@@ -18,6 +18,7 @@
 import time
 import json
 import os
+import hashlib
 from flcore.clients.clientfoul import clientFOUL
 from flcore.servers.serverbase import Server
 from utils.model_utils import ParamDict
@@ -34,10 +35,15 @@ import wandb
 from utils.hierarchical_data import read_hierarchical_client_data
 from utils.clip_breed_compare import compare_prompt_cluster
 from flcore.servers.foul_pruning import aggregate_activation_summaries, prune_model
+from utils.pet_protocol import load_pet_split, apply_encoder_policy, dataset_signature
 
 class FOUL(Server):
     def __init__(self, args, times):
         super().__init__(args, times)
+
+        if args.learn_mode == 'unlearn':
+            self.load_model()
+            args.model = self.global_model
 
         # select slow clients
         self.set_slow_clients()
@@ -54,8 +60,6 @@ class FOUL(Server):
 
         # A standalone unlearning run continues from the model saved by the
         # learning stage. Joint runs keep using the in-memory trained model.
-        if args.learn_mode == 'unlearn':
-            self.load_model()
         self.Budget = []
         self.update_grads = None
         self.foul_c = args.c_parameter
@@ -71,8 +75,38 @@ class FOUL(Server):
         self.rgrad_balance = args.retain_balance
         self.hierarchical_metrics = []
         self.pruning_counts = None
+        self.model_costs = []
+        self.experiment_times = {}
+        self.update_diagnostics = []
         self.clip_comparison = None
         self._target_breed_cache = None
+
+    def load_model(self):
+        if not self._is_hierarchical():
+            return super().load_model()
+        path = getattr(self.args, 'pet_checkpoint', None) or os.path.join(
+            'models', self.dataset, self.algorithm + '_server.pt')
+        model = torch.load(path, map_location=self.device, weights_only=False)
+        if type(model) is not type(self.args.model):
+            raise ValueError('Checkpoint architecture differs from --pet-backbone')
+        config = self._hierarchical_config()
+        if (model.num_families != len(config['family_to_idx']) or
+                model.num_breeds != len(config['breed_to_idx']) or
+                model.image_size != int(config['image_size'])):
+            raise ValueError('Checkpoint dimensions differ from the dataset')
+        signature = getattr(model, 'dataset_signature', None)
+        if signature is not None and signature != dataset_signature(config):
+            raise ValueError('Checkpoint label mapping differs from the dataset')
+        protocol = getattr(model, 'pet_protocol', None)
+        if not protocol and getattr(self.args, 'pet_validation_fraction', 0):
+            raise ValueError('Legacy checkpoint has no held-out validation protocol; retrain or use fraction 0')
+        if protocol and any(protocol[key] != getattr(self.args, key, default)
+                            for key, default in [('pet_validation_fraction', 0.0), ('pet_split_seed', 1)]):
+            raise ValueError('Use the same validation fraction and split seed as the checkpoint')
+        self.global_model = model
+        self.source_checkpoint = os.path.abspath(path)
+        with open(path, 'rb') as checkpoint_file:
+            self.source_checkpoint_sha256 = hashlib.sha256(checkpoint_file.read()).hexdigest()
 
     def FUL_evaluate(self, acc=None, loss=None):
         if self._is_hierarchical():
@@ -86,8 +120,10 @@ class FOUL(Server):
         for client_id, train_slow, send_slow in zip(
             range(self.num_clients), self.train_slow_clients, self.send_slow_clients
         ):
-            train_data = read_hierarchical_client_data(
-                self.dataset, client_id, is_train=True, dataset_root=dataset_root
+            train_data = load_pet_split(
+                self.dataset, client_id, dataset_root, 'train',
+                getattr(self.args, 'pet_validation_fraction', 0.0),
+                getattr(self.args, 'pet_split_seed', 1)
             )
             test_data = read_hierarchical_client_data(
                 self.dataset, client_id, is_train=False, dataset_root=dataset_root
@@ -146,11 +182,13 @@ class FOUL(Server):
         self._target_breed_cache = (target_id, target_name)
         return self._target_breed_cache
 
-    def _evaluate_hierarchical(self, stage):
+    def _evaluate_hierarchical(self, stage, split=None):
+        split = split or ('validation' if getattr(self.args, 'pet_validation_fraction', 0) else 'test')
         target_id, target_name = self._resolve_target_breed()
         dataset_root = getattr(self.args, "dataset_root", "../dataset")
         config = self._hierarchical_config()
         num_families = len(config["family_to_idx"])
+        target_family_id = int(config["parent_by_breed"][target_name])
         totals = {
             "samples": 0,
             "breed_correct": 0,
@@ -165,17 +203,24 @@ class FOUL(Server):
             "breed_loss_sum": 0.0,
             "family_predictions": [0] * num_families,
             "family_labels": [0] * num_families,
+            "groups": {name: {"samples": 0, "family_correct": 0, "breed_correct": 0}
+                       for name in ("target", "same_family_other_breeds", "other_family")},
         }
         self.global_model.eval()
+        confusion = None
+        confidence_sum = 0.0
+        retained_loss_sum = 0.0
         with torch.no_grad():
             for client in self.clients:
                 if hasattr(self.global_model, "encode") and self.global_model.encoder_frozen:
-                    images, families, breeds = client._load_hierarchical_data(
-                        is_train=False
-                    ).tensors
+                    data = (client._load_hierarchical_data(is_train=False) if split == 'test'
+                            else client._load_hierarchical_data(split=split))
+                    images, families, breeds = data.tensors
                 else:
-                    data = read_hierarchical_client_data(
-                        self.dataset, client.id, is_train=False, dataset_root=dataset_root
+                    data = load_pet_split(
+                        self.dataset, client.id, dataset_root, split,
+                        getattr(self.args, 'pet_validation_fraction', 0.0),
+                        getattr(self.args, 'pet_split_seed', 1)
                     )
                     images, families, breeds = data["x"], data["y"], data["y_subclass"]
                 for start in range(0, len(images), self.batch_size):
@@ -208,6 +253,26 @@ class FOUL(Server):
                             )
                     target_mask = breed == target_id
                     other_mask = ~target_mask
+                    if confusion is None:
+                        confusion = torch.zeros((breed_logits.shape[1], breed_logits.shape[1]), dtype=torch.long)
+                    width = breed_logits.shape[1]
+                    confusion += torch.bincount((breed * width + breed_prediction).cpu(),
+                                                minlength=width * width).reshape(width, width)
+                    confidence_sum += float(breed_logits.softmax(1)[target_mask, target_id].sum())
+                    if other_mask.any():
+                        retained_loss_sum += float(torch.nn.functional.cross_entropy(
+                            breed_logits[other_mask], breed[other_mask], reduction='sum'))
+                    group_masks = {
+                        "target": target_mask,
+                        "same_family_other_breeds": other_mask & (family == target_family_id),
+                        "other_family": family != target_family_id,
+                    }
+                    for name, mask in group_masks.items():
+                        group = totals["groups"][name]
+                        group["samples"] += int(mask.sum().item())
+                        group["breed_correct"] += int((breed_correct & mask).sum().item())
+                        if num_families > 1:
+                            group["family_correct"] += int(((family_logits.argmax(dim=1) == family) & mask).sum().item())
                     totals["target_samples"] += int(target_mask.sum().item())
                     totals["other_samples"] += int(other_mask.sum().item())
                     totals["target_correct"] += int((breed_correct & target_mask).sum().item())
@@ -216,6 +281,10 @@ class FOUL(Server):
         if totals["samples"] == 0:
             raise ValueError("The pet dataset has no test examples")
         metrics = {
+            "breed_confusion_matrix": confusion.tolist(),
+            "target_mean_confidence": confidence_sum / totals['target_samples'] if totals['target_samples'] else None,
+            "non_target_breed_loss": retained_loss_sum / totals['other_samples'] if totals['other_samples'] else None,
+            "split": split,
             "stage": stage,
             "round": int(getattr(self, "current_round", 0)),
             "target_breed": target_name,
@@ -236,9 +305,19 @@ class FOUL(Server):
             "breed_test_loss": totals["breed_loss_sum"] / totals["samples"],
             "family_prediction_counts": totals["family_predictions"] if num_families > 1 else None,
             "family_label_counts": totals["family_labels"] if num_families > 1 else None,
+            "groups": {
+                name: {
+                    "samples": group["samples"],
+                    "breed_accuracy": group["breed_correct"] / group["samples"] if group["samples"] else None,
+                    "family_accuracy": (group["family_correct"] / group["samples"]
+                                        if group["samples"] and num_families > 1 else None),
+                }
+                for name, group in totals["groups"].items()
+            },
         }
-        self.rs_test_acc.append(metrics["overall_breed_accuracy"])
-        self.rs_train_loss.append(metrics["test_loss"])
+        if split != 'test' or not getattr(self.args, 'pet_validation_fraction', 0):
+            self.rs_test_acc.append(metrics["overall_breed_accuracy"])
+            self.rs_train_loss.append(metrics["test_loss"])
         self.hierarchical_metrics.append(metrics)
 
         print(f"Family accuracy: {metrics['family_accuracy'] if metrics['family_accuracy'] is not None else 'N/A'}")
@@ -254,7 +333,7 @@ class FOUL(Server):
     def _save_hierarchical_metrics(self):
         if not self.hierarchical_metrics:
             return
-        results_dir = "../results"
+        results_dir = getattr(self.args, 'results_dir', '../results')
         os.makedirs(results_dir, exist_ok=True)
         output_path = os.path.join(
             results_dir,
@@ -265,11 +344,62 @@ class FOUL(Server):
                 {
                     "metrics": self.hierarchical_metrics,
                     "pruning_counts": self.pruning_counts,
+                    "model_costs": self.model_costs,
+                    "times_seconds": self.experiment_times,
+                    "update_diagnostics": self.update_diagnostics,
+                    "experiment": {
+                        "encoder_policy": getattr(self.global_model, 'encoder_policy', 'full'),
+                        "initialization": getattr(self.global_model, 'initialization', 'unknown'),
+                        "pruning_strategy": getattr(self.args, 'pet_pruning_strategy', 'discriminative'),
+                        "forget_scope": getattr(self.args, 'pet_forget_scope', 'attribute'),
+                        "unlearning_method": getattr(self.args, 'pet_unlearning_method', 'foul'),
+                        "validation_fraction": getattr(self.args, 'pet_validation_fraction', 0.0),
+                        "split_seed": getattr(self.args, 'pet_split_seed', 1),
+                        "source_checkpoint": getattr(self, 'source_checkpoint', None),
+                        "source_checkpoint_sha256": getattr(self, 'source_checkpoint_sha256', None),
+                        "output_checkpoint": getattr(self, 'output_checkpoint', None),
+                        "augmentation": bool(getattr(self.args, 'pet_augment', False)),
+                        "batchnorm_running_statistics": 'fixed' if hasattr(self.global_model, 'backbone') else 'not_applicable',
+                        "completed_unlearning_updates": getattr(self, 'completed_unlearning_updates', 0),
+                        "forget_weight": float(getattr(self.args, 'beta_foul', 2.0)),
+                        "server_step_size": float(getattr(self.args, 'meta_lr', 0.5)),
+                        "encoder_learning_rate": float(getattr(self.args, 'pet_backbone_lr', 1e-5)),
+                        "seed": int(getattr(self.args, "run_seed", getattr(self.args, "seed", 1))),
+                        "pruning_rate": float(getattr(self.args, "pruning_rate", 0.5)),
+                        "backbone": getattr(self.args, "pet_backbone", None),
+                        "pruning_only": bool(getattr(self.args, "pet_pruning_only", False)),
+                        "retrain_reference": bool(getattr(self.args, "pet_retrain_reference", False)),
+                        "learn_rounds": self.learn_round,
+                        "unlearn_rounds": self.unlearn_round,
+                    },
                     "clip_comparison": self.clip_comparison,
                 },
                 result_file,
                 indent=2,
             )
+
+    def _record_model_cost(self, stage):
+        parameters = list(self.global_model.parameters())
+        buffers = list(self.global_model.buffers())
+        self.model_costs.append({
+            "stage": stage,
+            "total_parameters": sum(p.numel() for p in parameters),
+            "trainable_parameters": sum(p.numel() for p in parameters if p.requires_grad),
+            "tensor_bytes": sum(t.numel() * t.element_size() for t in parameters + buffers),
+        })
+
+    def _save_pet_treatment_model(self, treatment):
+        """Keep the trained reference checkpoint intact across ablation runs."""
+        output_dir = os.path.join(getattr(self.args, 'results_dir', '../results'), 'models', self.dataset)
+        os.makedirs(output_dir, exist_ok=True)
+        safe_goal = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(self.goal))
+        filename = f"{self.algorithm}_{safe_goal}_{self.times}_{treatment}.pt"
+        self.global_model.dataset_signature = dataset_signature(self._hierarchical_config())
+        self.global_model.pet_protocol = {
+            key: getattr(self.args, key, default) for key, default in
+            [('pet_validation_fraction', 0.0), ('pet_split_seed', 1)]}
+        self.output_checkpoint = os.path.abspath(os.path.join(output_dir, filename))
+        torch.save(self.global_model, self.output_checkpoint)
 
     def _sync_hierarchical_clients(self, reset_optimizers=False):
         for client in self.clients:
@@ -298,7 +428,7 @@ class FOUL(Server):
         if not getattr(self.args, "clip_compare", False):
             return
         config = self._hierarchical_config()
-        family_id = config["parent_by_breed"][str(target_id)]
+        family_id = config["parent_by_breed"][target_name]
         dataset_root = getattr(self.args, "dataset_root", "../dataset")
         images_by_breed = {}
         for client in self.clients:
@@ -349,17 +479,19 @@ class FOUL(Server):
         print(f"CLIP prompt/cluster comparison: {self.clip_comparison}")
 
     def _unlearn_hierarchical(self):
+        experiment_start = time.perf_counter()
+        # Selection history belongs to this phase, never to final held-out tests.
+        self.rs_test_acc = []
+        self.rs_train_loss = []
         target_id, target_name = self._resolve_target_breed()
-        if hasattr(self.global_model, "freeze_encoder"):
-            self.global_model.freeze_encoder()
-            for client in self.clients:
-                client._pet_feature_cache = {}
-            self._sync_hierarchical_clients(reset_optimizers=True)
+        # Compress the checkpoint in its trained state; set the unlearning
+        # encoder policy only after measuring the standalone pruning effect.
         print("\n======================================")
         print("\nFED Hierarchical Unlearning Stage")
         print(f"Forget breed: {target_name} (id={target_id})")
 
         baseline = self._evaluate_hierarchical("before_pruning")
+        self._record_model_cost("before_pruning")
         minimum_accuracy = float(getattr(self.args, "min_target_accuracy", 0.1))
         if baseline["target_breed_accuracy"] is None or baseline["target_breed_accuracy"] < minimum_accuracy:
             raise ValueError(
@@ -370,11 +502,9 @@ class FOUL(Server):
         self._compare_clip_selection(target_id, target_name)
 
         self._sync_hierarchical_clients()
-        summaries = [client.class_activation_summaries() for client in self.clients]
-        aggregated_summaries = aggregate_activation_summaries(summaries)
-        reference_layer = next(iter(aggregated_summaries.values()))
-        all_samples = sum(reference_layer["counts"].values())
-        target_samples = reference_layer["counts"].get(target_id, 0)
+        training_labels = [client._load_hierarchical_data().tensors[2] for client in self.clients]
+        target_samples = sum(int((labels == target_id).sum()) for labels in training_labels)
+        all_samples = sum(len(labels) for labels in training_labels)
         if all_samples == 0 or target_samples == 0:
             raise ValueError(
                 f"Target breed {target_name} has no federated training samples; "
@@ -382,19 +512,48 @@ class FOUL(Server):
             )
 
         rate = float(getattr(self.args, "pruning_rate", 0.5))
-        compact_model, self.pruning_counts = prune_model(
-            self.global_model, aggregated_summaries, target_id, pruning_rate=rate
-        )
-        self.global_model = compact_model.to(self.device)
-        self._sync_hierarchical_clients(reset_optimizers=True)
+        pruning_start = time.perf_counter()
+        if rate > 0:
+            strategy = getattr(self.args, 'pet_pruning_strategy', 'discriminative')
+            aggregated_summaries = {}
+            if strategy == 'discriminative':
+                summaries = [client.class_activation_summaries() for client in self.clients]
+                aggregated_summaries = aggregate_activation_summaries(summaries)
+            compact_model, self.pruning_counts = prune_model(
+                self.global_model, aggregated_summaries, target_id, pruning_rate=rate,
+                strategy=strategy, seed=getattr(self.args, 'run_seed', 1)
+            )
+            self.global_model = compact_model.to(self.device)
+            self._sync_hierarchical_clients(reset_optimizers=True)
+        else:
+            self.pruning_counts = {}
+        self.experiment_times["pruning_including_activation_scoring"] = time.perf_counter() - pruning_start
+        self._record_model_cost("after_pruning")
         print(f"Pruning rate: {rate:.0%}")
         print(f"Pruning counts: {self.pruning_counts}")
         self._evaluate_hierarchical("after_pruning")
+
+        if getattr(self.args, "pet_pruning_only", False):
+            if getattr(self.args, 'pet_validation_fraction', 0) and not getattr(self.args, 'pet_skip_final_test', False):
+                self._evaluate_hierarchical('after_pruning_test', split='test')
+            self.experiment_times["total_post_training"] = time.perf_counter() - experiment_start
+            self.save_results()
+            self._save_pet_treatment_model("pruning_only")
+            self._save_hierarchical_metrics()
+            return
+
+        apply_encoder_policy(self.global_model, getattr(self.args, 'pet_encoder_unlearning', 'preserve'))
+        for client in self.clients:
+            client._pet_feature_cache = {}
+        self._sync_hierarchical_clients(reset_optimizers=True)
+        self._record_model_cost('before_unlearning')
 
         for client in self.clients:
             client.re_init(self.args)
 
         successful_updates = 0
+        self.update_diagnostics = getattr(self, 'update_diagnostics', [])
+        unlearning_start = time.perf_counter()
         for round_index in range(self.unlearn_round):
             round_start = time.time()
             self.current_round = round_index
@@ -406,15 +565,17 @@ class FOUL(Server):
                 print(f"\n-------------Unlearning round: {round_index}-------------")
                 self._evaluate_hierarchical("unlearning")
 
-            retain_updates, forget_updates = [], []
+            retain_updates, forget_updates, retain_counts = [], [], []
+            method = getattr(self.args, 'pet_unlearning_method', 'foul')
             for client in selected_clients:
-                groups = client.unlearning_group_updates(self.global_model, target_id)
+                groups = client.unlearning_group_updates(self.global_model, target_id, include_forget=method == 'foul')
                 if groups["retain_model"] is not None:
                     retain_updates.append(self._model_delta_vector(groups["retain_model"], self.global_model))
+                    retain_counts.append(groups['retain_count'])
                 if groups["forget_model"] is not None:
                     forget_updates.append(self._model_delta_vector(groups["forget_model"], self.global_model))
 
-            if not forget_updates:
+            if not forget_updates and method == 'foul':
                 print("No selected client has target-breed samples this round; skipping model update.")
                 self.Budget.append(time.time() - round_start)
                 continue
@@ -422,12 +583,26 @@ class FOUL(Server):
                 raise ValueError("No retain update was produced; compact checkpoint was not saved")
 
             retain_tensor = torch.stack(retain_updates)
-            forget_tensor = torch.stack(forget_updates)
-            update = self.foul_update(
-                retain_tensor,
-                forget_tensor,
-                len(retain_updates) + len(forget_updates),
-            )
+            if method == 'retain':
+                weights = torch.tensor(retain_counts, dtype=retain_tensor.dtype)
+                update = (retain_tensor * (weights / weights.sum())[:, None]).sum(0)
+            else:
+                update = self.foul_update(retain_tensor, torch.stack(forget_updates),
+                                          len(retain_updates) + len(forget_updates))
+            def alignment(vector, reference):
+                denom = torch.linalg.vector_norm(vector) * torch.linalg.vector_norm(reference)
+                return float(torch.dot(vector.cpu(), reference.cpu()) / denom) if denom > 0 else None
+            self.update_diagnostics.append({
+                'round': round_index,
+                'method': method,
+                'retain_update_norm': float(torch.linalg.vector_norm(retain_tensor.mean(0))),
+                'forget_update_norm': (float(torch.linalg.vector_norm(torch.stack(forget_updates).mean(0)))
+                                       if forget_updates else None),
+                'server_update_norm': float(torch.linalg.vector_norm(update)),
+                'server_vs_retain_cosine': alignment(update, retain_tensor.mean(0)),
+                'server_vs_forget_cosine': (alignment(update, torch.stack(forget_updates).mean(0))
+                                            if forget_updates else None),
+            })
             trainable_parameters = [
                 parameter for parameter in self.global_model.parameters()
                 if parameter.requires_grad
@@ -439,24 +614,43 @@ class FOUL(Server):
             )
             successful_updates += 1
             self.Budget.append(time.time() - round_start)
-            print("Completed sample-group FOUL aggregation.")
+            print(f"Completed {method} aggregation.")
 
             if self.auto_break and self.check_done(acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt):
                 break
 
         if successful_updates == 0:
             raise ValueError("No FOUL update completed; compact checkpoint was not saved")
+        self.experiment_times["unlearning"] = time.perf_counter() - unlearning_start
+        self.completed_unlearning_updates = successful_updates
+        self.experiment_times["total_post_training"] = time.perf_counter() - experiment_start
         self._sync_hierarchical_clients()
+        self.current_round += 1
         self._evaluate_hierarchical("after_unlearning")
+        if getattr(self.args, 'pet_validation_fraction', 0) and not getattr(self.args, 'pet_skip_final_test', False):
+            self._evaluate_hierarchical('after_unlearning_test', split='test')
+        self.experiment_times['total_post_training'] = time.perf_counter() - experiment_start
+        self._record_model_cost("after_unlearning")
         self.save_results()
-        self.save_global_model()
+        self._save_pet_treatment_model("pruning_unlearning" if rate else "unlearning_only")
         self._save_hierarchical_metrics()
         print(f"Compact unlearned model saved; per-layer channels: {self.pruning_counts}")
 
     def train(self):
+        training_start = time.perf_counter()
+        if self._is_hierarchical():
+            self._record_model_cost('before_learning')
         print("\n======================================")
         print("\nFED Learning Stage")
+        if self._is_hierarchical() and getattr(self.args, "pet_retrain_reference", False):
+            target_id, _ = self._resolve_target_breed()
+            for client in self.clients:
+                client.retrain_reference_target = target_id
+                if getattr(self.args, 'pet_forget_scope', 'attribute') == 'examples':
+                    labels = client._load_hierarchical_data(is_train=True).tensors[2]
+                    client.train_samples = int((labels != target_id).sum().item())
         for i in range(self.learn_round if self._is_hierarchical() else self.learn_round + 1):
+            self.current_round = i
             s_t = time.time()
             if (self._is_hierarchical() and hasattr(self.global_model, "unfreeze_last_block")
                     and i == getattr(self.args, "pet_unfreeze_round", -1)):
@@ -524,7 +718,12 @@ class FOUL(Server):
                 break
 
         if self._is_hierarchical():
+            self.current_round += 1
             self._evaluate_hierarchical("after_learning")
+            if getattr(self.args, 'pet_validation_fraction', 0) and not getattr(self.args, 'pet_skip_final_test', False):
+                self._evaluate_hierarchical('after_learning_test', split='test')
+            self._record_model_cost('after_learning')
+            self.experiment_times['training_including_evaluation'] = time.perf_counter() - training_start
 
         print("\nBest accuracy.")
         # self.print_(max(self.rs_test_acc), max(
@@ -535,7 +734,10 @@ class FOUL(Server):
         print(sum(round_costs) / len(round_costs))
 
         self.save_results()
-        self.save_global_model()
+        if self._is_hierarchical():
+            self._save_pet_treatment_model('retrain_reference' if getattr(self.args, 'pet_retrain_reference', False) else 'trained')
+        else:
+            self.save_global_model()
         if self._is_hierarchical():
             self._save_hierarchical_metrics()
 

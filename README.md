@@ -1,5 +1,9 @@
 # FOUL: Computation and Communication Efficient Federated Unlearning via On-server Gradient Conflict Mitigation and Expression
 
+Protocolo de pesquisa com CNN treinável, controles de pruning, validação separada e diagnósticos: [RESEARCH_PROTOCOL.md](RESEARCH_PROTOCOL.md). Os novos comandos usam checkpoints específicos por experimento.
+
+Protocolo de remoção completa dos exemplos de uma raça: [EXAMPLE_REMOVAL_PROTOCOL.md](EXAMPLE_REMOVAL_PROTOCOL.md). A referência retreinada também exclui a raça da tarefa cachorro/gato.
+
 <div align="center">
 
 [![CVPR 2026](https://img.shields.io/badge/CVPR-2026-blue?style=for-the-badge)](https://cvpr.thecvf.com/)
@@ -98,6 +102,49 @@ python generate_PACS1.py iid balance -
 ## 🚀 Running Experiments
 
 ### Oxford Pet: pretrained breed model and semantic unlearning
+
+#### Research comparison: breed forgetting and pruning
+
+Use an annotated breed available in the generated dataset, such as `Chihuahua`.
+First train one reference checkpoint with `-lm learn`; run each treatment with
+`-lm unlearn` and a distinct `-go` value. The unlearning treatments all load
+`system/models/OxfordPet/FOUL_server.pt`. They save their output under a
+treatment-specific name, leaving that trained reference checkpoint intact.
+
+From `system/`, with a generated Oxford dataset under `../dataset/OxfordPet224`:
+
+```bash
+python main.py -data OxfordPet -algo FOUL -nc 20 -lm learn -lmr 40 -gr 40 \
+  -fb Chihuahua --dataset-root ../dataset/OxfordPet224 -go breed_train
+
+python main.py -data OxfordPet -algo FOUL -nc 20 -lm unlearn -lmr 40 -gr 50 \
+  -fb Chihuahua --dataset-root ../dataset/OxfordPet224 \
+  --pruning-rate 0 -go breed_unlearning_only
+
+python main.py -data OxfordPet -algo FOUL -nc 20 -lm unlearn -lmr 40 -gr 50 \
+  -fb Chihuahua --dataset-root ../dataset/OxfordPet224 \
+  --pruning-rate 0.5 --pet-pruning-only -go breed_pruning_only
+
+python main.py -data OxfordPet -algo FOUL -nc 20 -lm unlearn -lmr 40 -gr 50 \
+  -fb Chihuahua --dataset-root ../dataset/OxfordPet224 \
+  --pruning-rate 0.5 -go breed_combined
+
+python main.py -data OxfordPet -algo FOUL -nc 20 -lm learn -lmr 40 -gr 40 \
+  -fb Chihuahua --dataset-root ../dataset/OxfordPet224 \
+  --pet-retrain-reference -go breed_reference
+```
+
+Keep the same backbone, seed, dataset partition, checkpoint and unlearning
+rounds when comparing treatments. Training must exceed
+`--min-target-accuracy` on the target breed before a treatment starts. The
+`results/*_hierarchy.json` files report target, other breeds in the same
+family, and the other family separately, along with parameter counts, tensor
+bytes, and post-training times. A lower target-breed accuracy alone is not
+evidence of complete removal of learned information. The current ResNet18
+path prunes only its projection; its frozen encoder remains full size.
+The retraining reference excludes target images from the breed loss while
+retaining them in the dog/cat family loss, matching the stated research target.
+Use the same seed and training budget for the original and reference runs.
 
 Generate a new 224-pixel partition from the official Oxford source. Keep the
 existing 128-pixel partition for comparison; the generator will not overwrite

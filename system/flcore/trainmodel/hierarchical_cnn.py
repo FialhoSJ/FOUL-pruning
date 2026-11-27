@@ -35,6 +35,7 @@ class HierarchicalCNN(nn.Module):
         self.channels = tuple(int(width) for width in channels)
         self.hidden_dim = int(hidden_dim)
         self.pool_grid = int(pool_grid)
+        self.initialization = "random"
 
         self.conv1 = nn.Conv2d(3, self.channels[0], kernel_size=5, padding=2)
         self.conv2 = nn.Conv2d(self.channels[0], self.channels[1], kernel_size=3, padding=1)

@@ -125,6 +125,9 @@ celerybeat.pid
 .venv
 env/
 venv/
+.venv/
+.uv-cache/
+.uv-python/
 ENV/
 env.bak/
 venv.bak/
@@ -172,5 +175,19 @@ office_home/
 terra_incognita/
 runs/
 results/
+# Local experiment artifacts: retain only selected comparison figures and tables.
+results-2/*
+!results-2/comparisons/
+results-2/comparisons/*
+!results-2/comparisons/pruning_sweep_s1/
+results-2/comparisons/pruning_sweep_s1/*
+!results-2/comparisons/pruning_sweep_s1/*.png
+!results-2/comparisons/pruning_sweep_s1/*.pdf
+!results-2/comparisons/pruning_sweep_s1/*.csv
+# Downloaded datasets and trained checkpoints stay local.
+dataset/OxfordPet/
+dataset/OxfordPet20/
+dataset/source/
+system/models/
 conversion/download
 conversion/export

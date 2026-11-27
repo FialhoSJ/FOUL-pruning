@@ -118,19 +118,36 @@ def _copy_linear(old_layer, in_indices, out_indices=None):
     return new_layer
 
 
-def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate=0.5):
+def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate=0.5,
+                strategy="discriminative", seed=1):
     """Physically shrink eligible target-discriminative channels."""
     if not 0 < pruning_rate < 1:
         raise ValueError("pruning_rate must be between 0 and 1")
+    if strategy == "random":
+        rng = np.random.default_rng(seed)
+        score_map = {
+            name: rng.random(layer.out_channels if isinstance(layer, nn.Conv2d) else layer.out_features)
+            for name, layer in model.feature_layers()
+        }
+    elif strategy == "magnitude":
+        # Existing selector removes the highest scores; negate the channel norm
+        # so compression removes low-magnitude channels, independent of breed.
+        score_map = {
+            name: -layer.weight.detach().abs().flatten(1).mean(1).cpu().numpy()
+            for name, layer in model.feature_layers()
+        }
+    elif strategy == "discriminative":
+        score_map = tfidf_channel_scores(class_activation_summaries, target_breed_id)
+    else:
+        raise ValueError(f"Unknown pruning strategy: {strategy}")
     if hasattr(model, "backbone") and hasattr(model, "fc1"):
         return _prune_resnet_projection(
-            model, class_activation_summaries, target_breed_id, pruning_rate
+            model, score_map, pruning_rate
         )
     required_layers = ("conv1", "conv2", "conv3", "fc1")
     model_layers = dict(model.feature_layers())
     if any(name not in model_layers for name in required_layers):
         raise TypeError("model does not expose the supported hierarchical CNN feature layers")
-    score_map = tfidf_channel_scores(class_activation_summaries, target_breed_id)
 
     keep = {
         name: _selected_channels(score_map[name], layer.out_channels if isinstance(layer, nn.Conv2d)
@@ -188,11 +205,11 @@ def prune_model(model, class_activation_summaries, target_breed_id, pruning_rate
     return compact, counts
 
 
-def _prune_resnet_projection(model, summaries, target_breed_id, pruning_rate):
+def _prune_resnet_projection(model, score_map, pruning_rate):
     """Prune the trainable projection, leaving residual connections intact."""
     if tuple(name for name, _ in model.feature_layers()) != ("fc1",):
         raise TypeError("Unsupported pretrained backbone feature layers")
-    scores = tfidf_channel_scores(summaries, target_breed_id)["fc1"]
+    scores = score_map["fc1"]
     keep = _selected_channels(scores, model.fc1.out_features, pruning_rate)
     compact = copy.deepcopy(model)
     compact.fc1 = _copy_linear(model.fc1, torch.arange(model.fc1.in_features), keep)
